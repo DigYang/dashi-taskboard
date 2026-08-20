@@ -330,7 +330,7 @@ export function ProjectAutomationMenu({
               options={[1, 5, 10, 15, 30].map((minutes) => ({
                 value: String(minutes),
                 label: text(`${minutes} 分钟`, `${minutes} min`),
-                icon: <LinearIcon name="recurrence" />,
+                icon: <RecurrenceIcon />,
               }))}
               open={pickerMenu === "linearInterval"}
               disabled={linearSyncPending}

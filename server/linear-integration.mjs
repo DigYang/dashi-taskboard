@@ -16,15 +16,28 @@ const METADATA_QUERY = `
   }
 `;
 
+const TEAM_MEMBERS_QUERY = `
+  query TaskboardLinearTeamMembers($id: String!) {
+    team(id: $id) {
+      members(first: 250) { nodes { id name email avatarUrl } }
+    }
+  }
+`;
+
 const ISSUES_QUERY = `
   query TaskboardAssignedIssues($after: String, $filter: IssueFilter) {
     viewer {
       assignedIssues(first: 100, after: $after, orderBy: updatedAt, filter: $filter) {
         nodes {
-          id identifier title description priority dueDate url createdAt updatedAt
+          id identifier title description priority estimate dueDate url createdAt updatedAt
           state { id name type }
           team { id key name }
           project { id name }
+          parent {
+            id identifier title url priority
+            state { id name type }
+            assignee { id name email avatarUrl }
+          }
           labels(first: 100) { nodes { id name } }
           assignee { id name email avatarUrl }
           creator { id name email avatarUrl }
@@ -38,6 +51,23 @@ const ISSUES_QUERY = `
 const UPDATE_ISSUE_MUTATION = `
   mutation TaskboardUpdateIssue($id: String!, $input: IssueUpdateInput!) {
     issueUpdate(id: $id, input: $input) { success issue { id updatedAt } }
+  }
+`;
+
+const CREATE_ISSUE_MUTATION = `
+  mutation TaskboardCreateIssue($input: IssueCreateInput!) {
+    issueCreate(input: $input) {
+      success
+      issue {
+        id identifier title description priority estimate dueDate url createdAt updatedAt
+        state { id name type }
+        team { id key name }
+        project { id name }
+        labels(first: 100) { nodes { id name } }
+        assignee { id name email avatarUrl }
+        creator { id name email avatarUrl }
+      }
+    }
   }
 `;
 
@@ -57,7 +87,8 @@ export function taskStatusFromLinear(state) {
   if (state?.type === "completed") return "done";
   if (state?.type === "backlog") return "backlog";
   if (state?.type === "unstarted") return "todo";
-  if (includesAny(name, ["review", "verify", "test", "验收", "评审", "测试"])) {
+  if (includesAny(name, ["verify", "test", "qa", "验收", "测试"])) return "in_test";
+  if (includesAny(name, ["review", "评审"])) {
     return "in_review";
   }
   if (includesAny(name, ["block", "hold", "阻塞", "挂起"])) return "blocked";
@@ -92,6 +123,21 @@ function normalizeIssue(issue, config, index = 0) {
   const internalId = `LINEAR:${config.organizationId.toUpperCase()}:${externalId}`;
   const assignee = actorFromLinear(issue.assignee, config.displayName);
   const creator = actorFromLinear(issue.creator, config.displayName);
+  const parent = issue.parent?.id
+    ? {
+        id: `LINEAR:${config.organizationId.toUpperCase()}:${issue.parent.id}`,
+        identifier: `LINEAR:${config.organizationId.toUpperCase()}:${issue.parent.id}`,
+        externalKey: limitedString(issue.parent.identifier, "LINEAR", 128),
+        projectId: LINEAR_PROJECT_ID,
+        title: limitedString(issue.parent.title, issue.parent.identifier, 240),
+        status: taskStatusFromLinear(issue.parent.state),
+        priority: taskPriorityFromLinear(issue.parent.priority),
+        assignee: actorFromLinear(issue.parent.assignee, "Linear user"),
+        archivedAt: null,
+        externalUrl: typeof issue.parent.url === "string" ? issue.parent.url : null,
+        externalOnly: true,
+      }
+    : null;
   const labels = Array.isArray(issue?.labels?.nodes)
     ? [...new Set(issue.labels.nodes.flatMap((label) => {
       if (typeof label?.name !== "string") return [];
@@ -106,6 +152,9 @@ function normalizeIssue(issue, config, index = 0) {
     description: typeof issue.description === "string" ? issue.description.slice(0, 100_000) : "",
     status: taskStatusFromLinear(issue.state),
     priority: taskPriorityFromLinear(issue.priority),
+    estimate: typeof issue.estimate === "number" && Number.isFinite(issue.estimate)
+      ? issue.estimate
+      : null,
     labels,
     sortOrder: (index + 1) * 1024,
     creator,
@@ -115,12 +164,13 @@ function normalizeIssue(issue, config, index = 0) {
     externalId,
     externalKey,
     externalUrl: typeof issue.url === "string" ? issue.url : null,
+    parent,
     createdAt: typeof issue.createdAt === "string" ? issue.createdAt : new Date().toISOString(),
     updatedAt: typeof issue.updatedAt === "string" ? issue.updatedAt : new Date().toISOString(),
   };
 }
 
-function safeConfig(config, lastSyncedAt = null) {
+function safeConfig(config, lastSyncedAt = null, members = []) {
   return config
     ? {
       configured: true,
@@ -128,6 +178,7 @@ function safeConfig(config, lastSyncedAt = null) {
       organizationName: config.organizationName,
       teams: config.teams,
       projects: config.projects,
+      members,
       projectId: LINEAR_PROJECT_ID,
       lastSyncedAt,
     }
@@ -137,6 +188,7 @@ function safeConfig(config, lastSyncedAt = null) {
       organizationName: null,
       teams: [],
       projects: [],
+      members: [],
       projectId: LINEAR_PROJECT_ID,
       lastSyncedAt: null,
     };
@@ -160,6 +212,7 @@ export function createLinearIntegration({ configStore, database, fetch: fetchImp
   let pendingSync = null;
   let workflowStates = [];
   let labelCatalog = [];
+  let memberCatalog = [];
   const issueTeams = new Map();
 
   async function request(config, query, variables = {}) {
@@ -219,10 +272,18 @@ export function createLinearIntegration({ configStore, database, fetch: fetchImp
     }
     workflowStates = Array.isArray(data?.workflowStates?.nodes) ? data.workflowStates.nodes : [];
     labelCatalog = Array.isArray(data?.issueLabels?.nodes) ? data.issueLabels.nodes : [];
+    const teams = Array.isArray(data?.teams?.nodes) ? data.teams.nodes : [];
+    const teamIds = resolveFilterIds(config.teams, teams, ["id", "key", "name"], "Team");
+    const memberResults = await Promise.all(teamIds.map((id) => request(config, TEAM_MEMBERS_QUERY, { id })));
+    memberCatalog = memberResults
+      .flatMap((result) => Array.isArray(result?.team?.members?.nodes) ? result.team.members.nodes : [])
+      .filter((member, index, members) => (
+        member?.id && members.findIndex((candidate) => candidate?.id === member.id) === index
+      ));
     return {
       organization: data.organization,
       viewer: data.viewer,
-      teams: Array.isArray(data?.teams?.nodes) ? data.teams.nodes : [],
+      teams,
       projects: Array.isArray(data?.projects?.nodes) ? data.projects.nodes : [],
     };
   }
@@ -282,14 +343,14 @@ export function createLinearIntegration({ configStore, database, fetch: fetchImp
       },
     );
     lastSyncedAt = syncStartedAt;
-    return safeConfig(config, lastSyncedAt);
+    return safeConfig(config, lastSyncedAt, memberCatalog.map((member) => actorFromLinear(member, "Linear user")));
   }
 
   async function sync({ force = false } = {}) {
     const config = await configStore.read();
     if (!config) return safeConfig(null);
     if (!force && lastSyncedAt && Date.now() - new Date(lastSyncedAt).getTime() < SYNC_INTERVAL_MS) {
-      return safeConfig(config, lastSyncedAt);
+      return safeConfig(config, lastSyncedAt, memberCatalog.map((member) => actorFromLinear(member, "Linear user")));
     }
     if (pendingSync) return pendingSync;
     pendingSync = syncWithConfig(config, { full: force }).finally(() => {
@@ -340,9 +401,23 @@ export function createLinearIntegration({ configStore, database, fetch: fetchImp
     });
   }
 
+  function resolveMemberId(assigneeId) {
+    const linearId = typeof assigneeId === "string" && assigneeId.startsWith("linear:")
+      ? assigneeId.slice("linear:".length)
+      : "";
+    const member = memberCatalog.find((candidate) => candidate?.id === linearId);
+    if (!member) {
+      throw new ApiError(409, "LINEAR_ASSIGNEE_UNAVAILABLE", "所选负责人不属于当前 Linear Team");
+    }
+    return member.id;
+  }
+
   return {
     async status() {
-      return safeConfig(await configStore.read(), lastSyncedAt);
+      const config = await configStore.read();
+      if (!config) return safeConfig(null);
+      if (memberCatalog.length === 0) await fetchMetadata(config);
+      return safeConfig(config, lastSyncedAt, memberCatalog.map((member) => actorFromLinear(member, "Linear user")));
     },
     async configure(input) {
       const current = await configStore.read();
@@ -362,13 +437,52 @@ export function createLinearIntegration({ configStore, database, fetch: fetchImp
       );
       const savedConfig = await configStore.save(config);
       lastSyncedAt = new Date().toISOString();
-      return safeConfig(savedConfig, lastSyncedAt);
+      return safeConfig(savedConfig, lastSyncedAt, memberCatalog.map((member) => actorFromLinear(member, "Linear user")));
     },
     sync,
     async reconcile() {
       const config = await configStore.read();
       if (!config) throw new ApiError(409, "LINEAR_NOT_CONFIGURED", "Linear 尚未配置");
       return syncWithConfig(config, { full: true });
+    },
+    async createTask(input) {
+      const config = await configStore.read();
+      if (!config) throw new ApiError(409, "LINEAR_NOT_CONFIGURED", "Linear 尚未配置");
+      const metadata = await fetchMetadata(config);
+      const teamIds = resolveFilterIds(config.teams, metadata.teams, ["id", "key", "name"], "Team");
+      if (teamIds.length !== 1) {
+        throw new ApiError(409, "LINEAR_CREATE_TEAM_REQUIRED", "创建 Linear Issue 时必须只配置一个 Team");
+      }
+      const projectIds = resolveFilterIds(config.projects, metadata.projects, ["id", "name"], "Project");
+      if (projectIds.length > 1) {
+        throw new ApiError(409, "LINEAR_CREATE_PROJECT_AMBIGUOUS", "创建 Linear Issue 时最多只能配置一个 Project");
+      }
+      const teamId = teamIds[0];
+      const createInput = {
+        teamId,
+        assigneeId: input.assigneeId ? resolveMemberId(input.assigneeId) : metadata.viewer.id,
+        title: input.title,
+        description: input.description,
+        priority: linearPriorityFromTask(input.priority),
+        stateId: resolveState(teamId, input.status),
+        ...(input.labels.length > 0 ? { labelIds: resolveLabelIds(teamId, input.labels) } : {}),
+        ...(input.dueDate ? { dueDate: input.dueDate } : {}),
+        ...(projectIds.length === 1 ? { projectId: projectIds[0] } : {}),
+      };
+      const data = await request(config, CREATE_ISSUE_MUTATION, { input: createInput });
+      if (data?.issueCreate?.success !== true || !data.issueCreate.issue?.id) {
+        throw new ApiError(409, "LINEAR_CREATE_FAILED", "Linear 未确认 Issue 创建成功");
+      }
+      const issue = data.issueCreate.issue;
+      if (issue.identifier && issue.team?.id) issueTeams.set(issue.identifier, issue.team.id);
+      const normalized = normalizeIssue(issue, config);
+      database.syncLinearTasks([normalized], {
+        archiveMissing: false,
+        projectName: `Linear · ${config.organizationName}`,
+        projectLabels: labelCatalog.map((label) => label.name),
+      });
+      lastSyncedAt = new Date().toISOString();
+      return database.getTask(normalized.id);
     },
     async updateTask(task, changes) {
       const config = await configStore.read();
@@ -385,6 +499,9 @@ export function createLinearIntegration({ configStore, database, fetch: fetchImp
       if (Object.hasOwn(changes, "priority") && changes.priority !== task.priority) {
         input.priority = linearPriorityFromTask(changes.priority);
       }
+      if (Object.hasOwn(changes, "estimate") && changes.estimate !== task.estimate) {
+        input.estimate = changes.estimate;
+      }
       if (Object.hasOwn(changes, "labels") && JSON.stringify(changes.labels) !== JSON.stringify(task.labels)) {
         input.labelIds = resolveLabelIds(teamId, changes.labels);
       }
@@ -393,6 +510,12 @@ export function createLinearIntegration({ configStore, database, fetch: fetchImp
       }
       if (Object.hasOwn(changes, "status") && changes.status !== task.status) {
         input.stateId = resolveState(teamId, changes.status);
+      }
+      if (Object.hasOwn(changes, "parentId")) {
+        input.parentId = changes.parentId;
+      }
+      if (Object.hasOwn(changes, "assigneeId")) {
+        input.assigneeId = resolveMemberId(changes.assigneeId);
       }
       if (Object.keys(input).length === 0) return false;
       const data = await request(config, UPDATE_ISSUE_MUTATION, { id: task.externalKey, input });

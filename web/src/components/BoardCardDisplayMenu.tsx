@@ -1,18 +1,36 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { useTaskboardI18n } from "../i18n";
+import type { TaskStatus } from "../types";
 import { LinearIcon } from "./LinearIcon";
 
 interface BoardCardDisplayMenuProps {
   cover: boolean;
   body: boolean;
+  statuses: readonly TaskStatus[];
+  visibleStatuses: readonly TaskStatus[];
   onChange: (value: { cover: boolean; body: boolean }) => void;
+  onToggleStatus: (status: TaskStatus) => void;
 }
+
+const STATUS_LABELS: Record<TaskStatus, string> = {
+  backlog: "Backlog",
+  todo: "To do",
+  in_progress: "In progress",
+  blocked: "Blocked",
+  in_review: "In review",
+  in_test: "In Test",
+  done: "Done",
+  canceled: "Canceled",
+};
 
 export function BoardCardDisplayMenu({
   cover,
   body,
+  statuses,
+  visibleStatuses,
   onChange,
+  onToggleStatus,
 }: BoardCardDisplayMenuProps) {
   const { text } = useTaskboardI18n();
   const triggerRef = useRef<HTMLButtonElement>(null);
@@ -56,11 +74,33 @@ export function BoardCardDisplayMenu({
       ref={menuRef}
       className="project-automation-menu no-drag"
       role="dialog"
-      aria-label={text("卡片显示设置", "Card display settings")}
+      aria-label={text("看板显示设置", "Board display settings")}
       style={{ left: position.left, top: position.top, visibility: position.ready ? "visible" : "hidden" }}
     >
       <div className="project-automation-menu-heading">
-        <strong>{text("卡片显示", "Card display")}</strong>
+        <strong>{text("看板显示", "Board display")}</strong>
+      </div>
+      <div className="board-display-section-title">{text("显示分类", "Visible columns")}</div>
+      {statuses.map((status) => {
+        const visible = visibleStatuses.includes(status);
+        return (
+          <div className="project-automation-switch" key={status}>
+            <span>{STATUS_LABELS[status]}</span>
+            <button
+              type="button"
+              className={`board-setting-switch${visible ? " is-on" : ""}`}
+              role="switch"
+              aria-label={STATUS_LABELS[status]}
+              aria-checked={visible}
+              onClick={() => onToggleStatus(status)}
+            >
+              <span aria-hidden="true" />
+            </button>
+          </div>
+        );
+      })}
+      <div className="project-automation-section">
+        <div className="board-display-section-title">{text("卡片内容", "Card content")}</div>
       </div>
       <div className="project-automation-switch">
         <span>{text("封面", "Cover")}</span>
@@ -98,10 +138,10 @@ export function BoardCardDisplayMenu({
         ref={triggerRef}
         className={`task-filter-trigger board-card-display-trigger${open ? " is-open" : ""}`}
         type="button"
-        aria-label={text("卡片显示设置", "Card display settings")}
+        aria-label={text("看板显示设置", "Board display settings")}
         aria-haspopup="dialog"
         aria-expanded={open}
-        title={text("卡片显示", "Card display")}
+        title={text("看板显示", "Board display")}
         onClick={() => {
           if (!open) setPosition({ left: 0, top: 0, ready: false });
           setOpen((current) => !current);

@@ -14,6 +14,7 @@ export const STATUS_DETAILS: Record<
   todo: { label: "等待认领", tone: "todo" },
   in_progress: { label: "处理中", tone: "progress" },
   in_review: { label: "等你确认", tone: "review" },
+  in_test: { label: "测试中", tone: "test" },
   blocked: { label: "遇到阻碍", tone: "blocked" },
   done: { label: "完成", tone: "done" },
   canceled: { label: "取消", tone: "canceled" },

@@ -45,6 +45,7 @@ const WEEK_MS = 7 * DAY_MS;
 const STARTED_STATUSES = new Set<Task["status"]>([
   "in_progress",
   "in_review",
+  "in_test",
   "blocked",
 ]);
 
@@ -225,7 +226,7 @@ export function DashboardView({
   const rangeEnd = new Date(todayValue);
   rangeEnd.setMonth(rangeEnd.getMonth() + 3);
   const rangeEndValue = rangeEnd.getTime();
-  const upcomingEnd = todayValue + 14 * 86_400_000;
+  const upcomingEnd = todayValue + 14 * DAY_MS;
   const activeTasks = tasks.filter((task) => task.status !== "done" && task.status !== "canceled");
   const completedTasks = tasks.filter((task) => task.status === "done");
   const overdueTasks = activeTasks.filter((task) => task.dueDate && dayValue(task.dueDate) < todayValue);
@@ -400,6 +401,11 @@ export function DashboardView({
       tone: "review",
     },
     {
+      label: taskStatusLabel(language, "in_test"),
+      value: tasks.filter((task) => task.status === "in_test").length,
+      tone: "review",
+    },
+    {
       label: taskStatusLabel(language, "blocked"),
       value: tasks.filter((task) => task.status === "blocked").length,
       tone: "blocked",
@@ -524,21 +530,27 @@ export function DashboardView({
         </div>
 
         <div className="dashboard-grid">
-          <section className="dashboard-panel dashboard-primary-panel dashboard-priority-panel">
-            <header><span>{text("优先级", "Priority")}</span></header>
-            <div className="dashboard-priority-list">
-              {priorityCounts.map((item) => (
-                <div className={`dashboard-priority-row priority-${item.priority}`} key={item.priority}>
-                  <span className="dashboard-priority-name">
-                    <PriorityIcon priority={item.priority} size={13} />
-                    {item.label}
-                  </span>
-                  <span className="dashboard-priority-track">
-                    <i style={{ width: `${tasks.length ? (item.count / tasks.length) * 100 : 0}%` }} />
-                  </span>
-                  <strong>{item.count}</strong>
-                </div>
-              ))}
+          <section className="dashboard-panel dashboard-primary-panel dashboard-upcoming-panel">
+            <header><span>{text("即将到期", "Due soon")}</span></header>
+            <div className="dashboard-task-list">
+              {upcomingTasks.length ? upcomingTasks.map((task) => (
+                <button
+                  type="button"
+                  className="dashboard-upcoming-row"
+                  onClick={() => onOpenTask(task)}
+                  key={task.id}
+                >
+                  <img
+                    src={task.status === "in_review" ? dueDoneIcon : dueEditIcon}
+                    alt=""
+                    aria-hidden="true"
+                  />
+                  <strong>{task.title}</strong>
+                  <time>ID: {task.externalKey ?? task.identifier} | {shortDate(task.dueDate!, locale)}</time>
+                </button>
+              )) : (
+                <div className="dashboard-empty">{text("近期没有到期议题", "No issues are due soon")}</div>
+              )}
             </div>
           </section>
 
@@ -684,27 +696,21 @@ export function DashboardView({
             </div>
           </section>
 
-          <section className="dashboard-panel dashboard-tertiary-panel dashboard-upcoming-panel">
-            <header><span>{text("即将到期", "Due soon")}</span></header>
-            <div className="dashboard-task-list">
-              {upcomingTasks.length ? upcomingTasks.map((task) => (
-                <button
-                  type="button"
-                  className="dashboard-upcoming-row"
-                  onClick={() => onOpenTask(task)}
-                  key={task.id}
-                >
-                  <img
-                    src={task.status === "in_review" ? dueDoneIcon : dueEditIcon}
-                    alt=""
-                    aria-hidden="true"
-                  />
-                  <strong>{task.title}</strong>
-                  <time>ID: {task.externalKey ?? task.identifier} | {shortDate(task.dueDate!, locale)}</time>
-                </button>
-              )) : (
-                <div className="dashboard-empty">{text("近期没有到期议题", "No issues are due soon")}</div>
-              )}
+          <section className="dashboard-panel dashboard-tertiary-panel dashboard-priority-panel">
+            <header><span>{text("优先级", "Priority")}</span></header>
+            <div className="dashboard-priority-list">
+              {priorityCounts.map((item) => (
+                <div className={`dashboard-priority-row priority-${item.priority}`} key={item.priority}>
+                  <span className="dashboard-priority-name">
+                    <PriorityIcon priority={item.priority} size={13} />
+                    {item.label}
+                  </span>
+                  <span className="dashboard-priority-track">
+                    <i style={{ width: `${tasks.length ? (item.count / tasks.length) * 100 : 0}%` }} />
+                  </span>
+                  <strong>{item.count}</strong>
+                </div>
+              ))}
             </div>
           </section>
 

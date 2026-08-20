@@ -3,6 +3,7 @@ export const TASK_STATUSES = [
   "todo",
   "in_progress",
   "in_review",
+  "in_test",
   "blocked",
   "done",
   "canceled",

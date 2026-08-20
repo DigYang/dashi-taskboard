@@ -94,6 +94,50 @@ function createdDate(value: string, locale: string, text: (chinese: string, engl
   return text(`${formatted}创建`, `Created ${formatted}`);
 }
 
+function estimateLabel(estimate: number) {
+  return `${estimate} ${estimate === 1 ? "Point" : "Points"}`;
+}
+
+const ESTIMATE_OPTIONS = [0, 1, 2, 3, 5, 8] as const;
+
+function EstimateControl({
+  task,
+  disabled,
+  open,
+  onOpenChange,
+  onChange,
+}: {
+  task: Task;
+  disabled: boolean;
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  onChange: (estimate: number | null) => void;
+}) {
+  const { text } = useTaskboardI18n();
+  const displayIdentifier = task.externalKey ?? task.identifier;
+  return (
+    <TaskPropertyPicker
+      value={task.estimate === null ? "" : String(task.estimate)}
+      options={[
+        { value: "", label: text("无点数", "No estimate"), icon: <LinearIcon name="estimate" /> },
+        ...ESTIMATE_OPTIONS.map((estimate) => ({
+          value: String(estimate),
+          label: estimateLabel(estimate),
+          icon: <LinearIcon name="estimate" />,
+        })),
+      ]}
+      open={open}
+      disabled={disabled}
+      className="card-property-control"
+      triggerClassName="estimate-chip"
+      ariaLabel={text(`${displayIdentifier} 点数`, `${displayIdentifier} estimate`)}
+      title={text("Linear 点数", "Linear estimate")}
+      onOpenChange={onOpenChange}
+      onChange={(value) => onChange(value === "" ? null : Number(value))}
+    />
+  );
+}
+
 function elapsedTime(startedAt: string | null, now: number) {
   if (!startedAt) return "";
   const elapsed = Math.max(0, Math.floor((now - new Date(startedAt).getTime()) / 1000));
@@ -409,8 +453,8 @@ export function TaskCard({
 }: TaskCardProps) {
   const { locale, text } = useTaskboardI18n();
   const displayIdentifier = task.externalKey ?? task.identifier;
-  const [propertyMenu, setPropertyMenu] = useState<"priority" | "labels" | "assignee" | null>(null);
-  const [savingProperty, setSavingProperty] = useState<"priority" | "labels" | "dueDate" | "assignee" | null>(null);
+  const [propertyMenu, setPropertyMenu] = useState<"priority" | "estimate" | "labels" | "assignee" | null>(null);
+  const [savingProperty, setSavingProperty] = useState<"priority" | "estimate" | "labels" | "dueDate" | "assignee" | null>(null);
   const creator: ActorIdentity = {
     type: task.creatorType,
     id: task.creatorId,
@@ -431,7 +475,10 @@ export function TaskCard({
     () => showBody ? taskBodyText(task.description) : "",
     [showBody, task.description],
   );
-  const hasProperties = task.priority !== "none" || task.labels.length > 0 || task.dueDate;
+  const hasProperties = task.priority !== "none"
+    || task.labels.length > 0
+    || task.dueDate
+    || task.estimate !== null;
   const showsProperties = Boolean(projectName)
     || (!processingCard && (hasProperties || showsInlineParticipants || showsConversation));
   const propertyDisabled = savingProperty !== null;
@@ -476,7 +523,7 @@ export function TaskCard({
           <span className="task-identifier">ID: {displayIdentifier}</span>
         </span>
         {presentation.unread && <span className="task-unread-dot" aria-label={text("有未读更新", "Unread updates")} />}
-        {task.status === "in_review" && onComplete && (
+        {(task.status === "in_review" || task.status === "in_test") && onComplete && (
           <button
             className="task-card-complete"
             type="button"
@@ -530,6 +577,15 @@ export function TaskCard({
               open={propertyMenu === "priority"}
               onOpenChange={(open) => setPropertyMenu(open ? "priority" : null)}
               onChange={(priority) => updateProperty({ priority }, "priority")}
+            />
+          )}
+          {!processingCard && task.estimate !== null && (
+            <EstimateControl
+              task={task}
+              disabled={propertyDisabled || task.source !== "linear"}
+              open={propertyMenu === "estimate"}
+              onOpenChange={(open) => setPropertyMenu(open ? "estimate" : null)}
+              onChange={(estimate) => updateProperty({ estimate }, "estimate")}
             />
           )}
           {!processingCard && task.labels.length > 0 && (

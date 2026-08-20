@@ -106,6 +106,7 @@ interface TaskDetailProps {
   tasks: Task[];
   referenceTasks: Task[];
   currentUser: ActorIdentity;
+  availableAssignees?: ActorIdentity[];
   availableLabels: string[];
   developmentScan: DevelopmentScan;
   developmentScanLoading: boolean;
@@ -461,6 +462,7 @@ export function TaskDetail({
   tasks,
   referenceTasks,
   currentUser,
+  availableAssignees,
   availableLabels,
   developmentScan,
   developmentScanLoading,
@@ -488,7 +490,7 @@ export function TaskDetail({
   );
   const [editingDescription, setEditingDescription] = useState(false);
   const [propertyMenu, setPropertyMenu] = useState<
-    "status" | "priority" | "assignee" | "labels" | "development" | "recurrence" | null
+    "status" | "priority" | "estimate" | "assignee" | "labels" | "development" | "recurrence" | null
   >(null);
   const [savingProperty, setSavingProperty] = useState<string | null>(null);
   const [attachments, setAttachments] = useState<Attachment[]>([]);
@@ -1002,7 +1004,11 @@ export function TaskDetail({
   ) {
     developmentOptions.unshift(currentTask.developmentContext);
   }
-  const assigneeOptions = [currentTask.assignee, currentUser, CODEX_AGENT_ACTOR]
+  const assigneeOptions = [
+    currentTask.assignee,
+    currentUser,
+    ...(availableAssignees ?? [CODEX_AGENT_ACTOR]),
+  ]
     .filter((actor, index, actors) => (
       actors.findIndex((candidate) => actorKey(candidate) === actorKey(actor)) === index
     ));
@@ -1728,6 +1734,31 @@ export function TaskDetail({
                 onChange={(priority) => void saveTask({ priority }, "priority")}
               />
             </div>
+            {currentTask.source === "linear" && (
+              <div className="detail-property-row">
+                <span className="detail-property-label">{text("点数", "Point")}</span>
+                <TaskPropertyPicker
+                  value={currentTask.estimate === null ? "" : String(currentTask.estimate)}
+                  options={[
+                    { value: "", label: text("无点数", "No estimate"), icon: <LinearIcon name="estimate" /> },
+                    ...[0, 1, 2, 3, 5, 8].map((estimate) => ({
+                      value: String(estimate),
+                      label: `${estimate} ${estimate === 1 ? "Point" : "Points"}`,
+                      icon: <LinearIcon name="estimate" />,
+                    })),
+                  ]}
+                  open={propertyMenu === "estimate"}
+                  disabled={savingProperty === "estimate"}
+                  className="detail-property-picker"
+                  triggerClassName="detail-property-trigger"
+                  ariaLabel={text("点数", "Point")}
+                  onOpenChange={(open) => setPropertyMenu(open ? "estimate" : null)}
+                  onChange={(value) => void saveTask({
+                    estimate: value === "" ? null : Number(value),
+                  }, "estimate")}
+                />
+              </div>
+            )}
             <div className="detail-property-row assignee-property">
               <span className="detail-property-label">{text("负责人", "Assignee")}</span>
               <TaskPropertyPicker
@@ -1740,17 +1771,22 @@ export function TaskDetail({
                   icon: <ActorAvatar actor={actor} className="task-property-assignee-avatar" />,
                 }))}
                 open={propertyMenu === "assignee"}
-                disabled={currentTask.source !== "local" || savingProperty === "assignee"}
+                disabled={currentTask.source === "jira" || savingProperty === "assignee"}
                 className="detail-property-picker"
                 triggerClassName="detail-property-trigger"
                 ariaLabel={text("负责人", "Assignee")}
+                searchable
+                searchPlaceholder={text("搜索负责人…", "Search assignees…")}
+                emptyText={text("没有匹配的负责人", "No matching assignees")}
                 onOpenChange={(open) => setPropertyMenu(open ? "assignee" : null)}
                 onChange={(value) => {
                   const selected = assigneeOptions.find((actor) => actorKey(actor) === value);
-                  const assigneeTarget = selected
+                  const assigneeTarget = selected && !selected.id.startsWith("linear:")
                     ? assigneeTargetForActor(selected, currentUser)
                     : undefined;
+                  const assigneeId = selected?.id.startsWith("linear:") ? selected.id : undefined;
                   if (assigneeTarget) void saveTask({ assigneeTarget }, "assignee");
+                  else if (assigneeId) void saveTask({ assigneeId }, "assignee");
                 }}
               />
             </div>

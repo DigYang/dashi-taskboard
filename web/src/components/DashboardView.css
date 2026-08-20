@@ -509,7 +509,7 @@
 
 .dashboard-view .dashboard-progress-panel { order: 1; }
 .dashboard-view .dashboard-label-panel { order: 2; }
-.dashboard-view .dashboard-upcoming-panel { order: 3; }
+.dashboard-view .dashboard-priority-panel { order: 3; }
 
 .dashboard-view .dashboard-grid .dashboard-progress-legend {
   gap: 24px;

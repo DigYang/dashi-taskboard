@@ -27,6 +27,9 @@ interface TaskPropertyPickerProps<Value extends string> {
   triggerContent?: ReactNode;
   ariaLabel: string;
   title?: string;
+  searchable?: boolean;
+  searchPlaceholder?: string;
+  emptyText?: string;
   onOpenChange: (open: boolean) => void;
   onChange: (value: Value) => void;
 }
@@ -41,15 +44,23 @@ export function TaskPropertyPicker<Value extends string>({
   triggerContent,
   ariaLabel,
   title,
+  searchable = false,
+  searchPlaceholder = "Search…",
+  emptyText = "No matches",
   onOpenChange,
   onChange,
 }: TaskPropertyPickerProps<Value>) {
   const rootRef = useRef<HTMLDivElement>(null);
   const triggerRef = useRef<HTMLButtonElement>(null);
   const menuRef = useRef<HTMLDivElement>(null);
+  const searchRef = useRef<HTMLInputElement>(null);
   const [position, setPosition] = useState({ left: 0, top: 0 });
   const [focusedIndex, setFocusedIndex] = useState(0);
+  const [query, setQuery] = useState("");
   const selected = options.find((option) => option.value === value) ?? options[0];
+  const visibleOptions = searchable && query.trim()
+    ? options.filter((option) => option.label.toLocaleLowerCase().includes(query.trim().toLocaleLowerCase()))
+    : options;
   const portalTarget = triggerRef.current?.closest("dialog, [role='dialog']") ?? document.body;
 
   function optionElements(): HTMLButtonElement[] {
@@ -72,7 +83,7 @@ export function TaskPropertyPicker<Value extends string>({
     if (event.key === "Enter" || event.key === " ") {
       if (currentIndex < 0) return;
       event.preventDefault();
-      selectOption(options[currentIndex]);
+      selectOption(visibleOptions[currentIndex]);
       return;
     }
     let nextIndex = currentIndex;
@@ -113,9 +124,14 @@ export function TaskPropertyPicker<Value extends string>({
 
   useEffect(() => {
     if (!open) return;
-    const nextIndex = Math.max(0, options.findIndex((option) => option.value === value));
+    setQuery("");
+    const nextIndex = Math.max(0, visibleOptions.findIndex((option) => option.value === value));
     setFocusedIndex(nextIndex);
-    requestAnimationFrame(() => optionElements()[nextIndex]?.focus({ preventScroll: true }));
+    if (searchable) {
+      requestAnimationFrame(() => searchRef.current?.focus());
+    } else {
+      requestAnimationFrame(() => optionElements()[nextIndex]?.focus({ preventScroll: true }));
+    }
   }, [open]);
 
   useEffect(() => {
@@ -137,7 +153,7 @@ export function TaskPropertyPicker<Value extends string>({
     }
 
     function closeFromViewportChange(event: Event) {
-      if (event.type === "scroll" && menuRef.current?.contains(event.target as Node)) return;
+      if (event.target instanceof Node && menuRef.current?.contains(event.target)) return;
       onOpenChange(false);
     }
 
@@ -156,15 +172,28 @@ export function TaskPropertyPicker<Value extends string>({
   const menu = open ? createPortal(
     <div
       ref={menuRef}
-      className="composer-popover task-property-popover"
-      role="listbox"
-      aria-label={ariaLabel}
+      className={`composer-popover task-property-popover${searchable ? " is-searchable" : ""}`}
       style={{ position: "fixed", left: position.left, top: position.top }}
       onKeyDown={handleMenuKeyDown}
       onBlur={closeFromFocusLeave}
     >
-      <div className="task-property-options">
-        {options.map((option, index) => (
+      {searchable && (
+        <label className="task-property-search">
+          <LinearIcon name="search" />
+          <input
+            ref={searchRef}
+            value={query}
+            aria-label={searchPlaceholder}
+            placeholder={searchPlaceholder}
+            onChange={(event) => {
+              setQuery(event.target.value);
+              setFocusedIndex(0);
+            }}
+          />
+        </label>
+      )}
+      <div className="task-property-options" role="listbox" aria-label={ariaLabel}>
+        {visibleOptions.map((option, index) => (
           <button
             type="button"
             role="option"
@@ -182,6 +211,7 @@ export function TaskPropertyPicker<Value extends string>({
             )}
           </button>
         ))}
+        {visibleOptions.length === 0 && <p className="task-property-empty">{emptyText}</p>}
       </div>
     </div>,
     portalTarget,

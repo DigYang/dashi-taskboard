@@ -111,9 +111,11 @@ interface TaskEditorProps {
   initialDraft: NewTaskEditorDraft | null;
   labels: string[];
   currentUser: ActorIdentity;
+  availableAssignees?: ActorIdentity[];
   developmentScan: DevelopmentScan;
   developmentScanLoading: boolean;
-  onCreateLabel: (label: string) => Promise<void>;
+  showDevelopmentContext?: boolean;
+  onCreateLabel?: (label: string) => Promise<void>;
   onCancel: (draft: NewTaskEditorDraft | null) => void;
   onSave: (
     draft: TaskDraft,
@@ -170,8 +172,10 @@ export function TaskEditor({
   initialDraft,
   labels: availableLabels,
   currentUser,
+  availableAssignees,
   developmentScan,
   developmentScanLoading,
+  showDevelopmentContext = true,
   onCreateLabel,
   onCancel,
   onSave,
@@ -272,7 +276,11 @@ export function TaskEditor({
         : subIssueIds,
   );
 
-  const assigneeOptions = [task?.assignee, currentUser, CODEX_AGENT_ACTOR]
+  const assigneeOptions = [
+    task?.assignee,
+    currentUser,
+    ...(availableAssignees ?? [CODEX_AGENT_ACTOR]),
+  ]
     .filter((actor): actor is ActorIdentity => actor !== undefined)
     .filter((actor, index, actors) => (
       actors.findIndex((candidate) => actorKey(candidate) === actorKey(actor)) === index
@@ -385,9 +393,14 @@ export function TaskEditor({
     setSaving(true);
     setError(null);
     try {
-      const assigneeTarget = task && actorKey(assignee) === actorKey(task.assignee)
+      const assigneeTarget = assignee.id.startsWith("linear:")
+        ? undefined
+        : task && actorKey(assignee) === actorKey(task.assignee)
         ? undefined
         : assigneeTargetForActor(assignee, currentUser);
+      const assigneeId = task && actorKey(assignee) === actorKey(task.assignee)
+        ? undefined
+        : assignee.id.startsWith("linear:") ? assignee.id : undefined;
       const descriptionValue = task
         ? description.trim()
         : serializeInlineMedia(descriptionSegments).trim();
@@ -398,6 +411,7 @@ export function TaskEditor({
         priority,
         labels: selectedLabels,
         ...(assigneeTarget ? { assigneeTarget } : {}),
+        ...(assigneeId ? { assigneeId } : {}),
         developmentContext,
         startDate: startDate || null,
         dueDate: dueDate || null,
@@ -644,6 +658,9 @@ export function TaskEditor({
               open={menu === "assignee"}
               triggerClassName="property-control property-assignee"
               ariaLabel={text("负责人", "Assignee")}
+              searchable
+              searchPlaceholder={text("搜索负责人…", "Search assignees…")}
+              emptyText={text("没有匹配的负责人", "No matching assignees")}
               onOpenChange={(open) => setMenu(open ? "assignee" : null)}
               onChange={(value) => {
                 const selected = assigneeOptions.find((actor) => actorKey(actor) === value);
@@ -661,32 +678,34 @@ export function TaskEditor({
               onCreateLabel={onCreateLabel}
             />
 
-            <TaskPropertyPicker
-              value={contextValue(developmentContext)}
-              options={[
-                {
-                  value: "",
-                  label: developmentScanLoading
-                    ? text("正在扫描 Git…", "Scanning Git…")
-                    : text("分支 / Worktree", "Branch / worktree"),
+            {showDevelopmentContext && (
+              <TaskPropertyPicker
+                value={contextValue(developmentContext)}
+                options={[
+                  {
+                    value: "",
+                    label: developmentScanLoading
+                      ? text("正在扫描 Git…", "Scanning Git…")
+                      : text("分支 / Worktree", "Branch / worktree"),
                   icon: <BranchIcon color="currentColor" size={14} />,
-                },
-                ...developmentOptions.map((context) => ({
-                  value: contextValue(context),
-                  label: contextLabel(context, text),
+                  },
+                  ...developmentOptions.map((context) => ({
+                    value: contextValue(context),
+                    label: contextLabel(context, text),
                   icon: context.type === "branch"
                     ? <BranchIcon color="currentColor" size={14} />
                     : <LinearIcon name="folder" />,
-                })),
-              ]}
-              open={menu === "development"}
-              disabled={developmentScanLoading}
-              triggerClassName="property-control property-development"
-              ariaLabel={text("代码分支或 Worktree", "Code branch or worktree")}
-              title={developmentScan.workspacePath ?? undefined}
-              onOpenChange={(open) => setMenu(open ? "development" : null)}
-              onChange={(value) => setDevelopmentContext(value ? JSON.parse(value) as DevelopmentContext : null)}
-            />
+                  })),
+                ]}
+                open={menu === "development"}
+                disabled={developmentScanLoading}
+                triggerClassName="property-control property-development"
+                ariaLabel={text("代码分支或 Worktree", "Code branch or worktree")}
+                title={developmentScan.workspacePath ?? undefined}
+                onOpenChange={(open) => setMenu(open ? "development" : null)}
+                onChange={(value) => setDevelopmentContext(value ? JSON.parse(value) as DevelopmentContext : null)}
+              />
+            )}
 
             {dueDate && (
               <button className="property-control" type="button" onClick={() => setMenu("due")}>
