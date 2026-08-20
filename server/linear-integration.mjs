@@ -48,6 +48,32 @@ const ISSUES_QUERY = `
   }
 `;
 
+const ISSUE_DETAIL_QUERY = `
+  query TaskboardLinearIssueDetail($id: String!) {
+    issue(id: $id) {
+      id identifier title description priority estimate dueDate url createdAt updatedAt
+      state { id name type }
+      team { id key name }
+      project { id name }
+      parent {
+        id identifier title url priority
+        state { id name type }
+        assignee { id name email avatarUrl }
+      }
+      children(first: 100) {
+        nodes {
+          id identifier title url priority
+          state { id name type }
+          assignee { id name email avatarUrl }
+        }
+      }
+      labels(first: 100) { nodes { id name } }
+      assignee { id name email avatarUrl }
+      creator { id name email avatarUrl }
+    }
+  }
+`;
+
 const UPDATE_ISSUE_MUTATION = `
   mutation TaskboardUpdateIssue($id: String!, $input: IssueUpdateInput!) {
     issueUpdate(id: $id, input: $input) { success issue { id updatedAt } }
@@ -167,6 +193,73 @@ function normalizeIssue(issue, config, index = 0) {
     parent,
     createdAt: typeof issue.createdAt === "string" ? issue.createdAt : new Date().toISOString(),
     updatedAt: typeof issue.updatedAt === "string" ? issue.updatedAt : new Date().toISOString(),
+  };
+}
+
+function externalRelationSummary(issue, config) {
+  return {
+    id: `LINEAR:${config.organizationId.toUpperCase()}:${issue.id}`,
+    identifier: `LINEAR:${config.organizationId.toUpperCase()}:${issue.id}`,
+    externalKey: limitedString(issue.identifier, "LINEAR", 128),
+    projectId: LINEAR_PROJECT_ID,
+    title: limitedString(issue.title, issue.identifier, 240),
+    status: taskStatusFromLinear(issue.state),
+    priority: taskPriorityFromLinear(issue.priority),
+    assignee: actorFromLinear(issue.assignee, "Linear user"),
+    archivedAt: null,
+    externalUrl: typeof issue.url === "string" ? issue.url : null,
+    externalOnly: true,
+  };
+}
+
+function relationSummaryFromTask(task) {
+  return {
+    id: task.id,
+    identifier: task.identifier,
+    externalKey: task.externalKey ?? null,
+    projectId: task.projectId,
+    title: task.title,
+    status: task.status,
+    priority: task.priority,
+    assignee: task.assignee,
+    archivedAt: task.archivedAt,
+    externalUrl: task.externalUrl,
+  };
+}
+
+function normalizeIssueDetail(issue, config) {
+  const normalized = normalizeIssue(issue, config);
+  const children = Array.isArray(issue?.children?.nodes) ? issue.children.nodes : [];
+  return {
+    ...normalized,
+    projectId: LINEAR_PROJECT_ID,
+    threadId: null,
+    threadBinding: null,
+    legacyLocalThreadId: null,
+    conversationRefs: [],
+    participants: [],
+    previewImage: null,
+    activityKey: `linear:${normalized.externalId}:${normalized.updatedAt}`,
+    activityUpdatedAt: normalized.updatedAt,
+    creatorType: normalized.creator.type,
+    creatorId: normalized.creator.id,
+    creatorName: normalized.creator.name,
+    creatorAvatarUrl: normalized.creator.avatarUrl,
+    workflowId: null,
+    developmentContext: null,
+    startDate: null,
+    recurrence: null,
+    source: "linear",
+    archivedAt: null,
+    readOnly: true,
+    relations: {
+      parent: normalized.parent,
+      subIssues: children.map((child) => externalRelationSummary(child, config)),
+      blockedBy: [],
+      blocks: [],
+      related: [],
+    },
+    version: 1,
   };
 }
 
@@ -444,6 +537,27 @@ export function createLinearIntegration({ configStore, database, fetch: fetchImp
       const config = await configStore.read();
       if (!config) throw new ApiError(409, "LINEAR_NOT_CONFIGURED", "Linear 尚未配置");
       return syncWithConfig(config, { full: true });
+    },
+    async getIssueDetail(id) {
+      const config = await configStore.read();
+      if (!config) throw new ApiError(409, "LINEAR_NOT_CONFIGURED", "Linear 尚未配置");
+      const externalId = String(id).startsWith(`LINEAR:${config.organizationId.toUpperCase()}:`)
+        ? String(id).slice(`LINEAR:${config.organizationId.toUpperCase()}:`.length)
+        : String(id);
+      const data = await request(config, ISSUE_DETAIL_QUERY, { id: externalId });
+      if (!data?.issue?.id) {
+        throw new ApiError(404, "LINEAR_ISSUE_NOT_FOUND", "Linear 中找不到此议题");
+      }
+      const detail = normalizeIssueDetail(data.issue, config);
+      if (detail.relations.parent) {
+        const localParent = database.getTask(detail.relations.parent.id);
+        if (localParent) detail.relations.parent = relationSummaryFromTask(localParent);
+      }
+      detail.relations.subIssues = detail.relations.subIssues.map((child) => {
+        const localChild = database.getTask(child.id);
+        return localChild ? relationSummaryFromTask(localChild) : child;
+      });
+      return detail;
     },
     async createTask(input) {
       const config = await configStore.read();

@@ -579,6 +579,14 @@ export async function getTask(taskId: string, signal?: AbortSignal): Promise<Tas
   return data.task;
 }
 
+export async function getLinearIssue(issueId: string, signal?: AbortSignal): Promise<Task> {
+  const data = await request<{ task: Task }>(
+    `/api/local/linear-issues/${encodeURIComponent(issueId)}`,
+    { signal },
+  );
+  return data.task;
+}
+
 export function listArchivedTasks(projectId?: string, signal?: AbortSignal): Promise<Task[]> {
   return listTasksByArchive(projectId, "true", signal);
 }
