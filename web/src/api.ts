@@ -196,6 +196,7 @@ export async function getLinearConnection(signal?: AbortSignal): Promise<LinearC
         organizationName: null,
         teams: [],
         projects: [],
+        members: [],
         projectId: "linear-my-issues",
         lastSyncedAt: null,
       };

@@ -5,11 +5,18 @@ export const MAIN_STATUSES = [
   "in_progress",
   "blocked",
   "in_review",
+  "in_test",
+  "done",
 ] as const satisfies readonly TaskStatus[];
 
 export const SECONDARY_STATUSES = [
   "backlog",
-  "done",
+  "canceled",
+] as const satisfies readonly TaskStatus[];
+
+export const BOARD_STATUS_OPTIONS = [
+  "backlog",
+  ...MAIN_STATUSES,
   "canceled",
 ] as const satisfies readonly TaskStatus[];
 

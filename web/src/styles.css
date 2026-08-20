@@ -36,6 +36,7 @@
   --status-todo: #9e9ea1;
   --status-progress: #f0bf00;
   --status-review: #43bc58;
+  --status-test: #e89b2d;
   --status-blocked: #f34e52;
   --status-done: #5e6ad2;
   --status-canceled: #9e9ea1;
@@ -73,6 +74,7 @@
   --status-todo: #999ba1;
   --status-progress: #e4b50f;
   --status-review: #53b98a;
+  --status-test: #efa947;
   --status-blocked: #ef686d;
   --status-done: #6e78df;
   --status-canceled: #85858b;
@@ -1286,6 +1288,13 @@ kbd {
   border-top: var(--border-hairline) solid var(--border);
 }
 
+.board-display-section-title {
+  margin-bottom: 4px;
+  color: var(--text-tertiary);
+  font-size: 11px;
+  font-weight: 600;
+}
+
 .project-automation-switch,
 .project-automation-field {
   justify-content: space-between;
@@ -1717,6 +1726,7 @@ kbd {
 
 .filter-status-icon.status-in_progress { color: var(--status-progress); }
 .filter-status-icon.status-in_review { color: var(--status-review); }
+.filter-status-icon.status-in_test { color: var(--status-test); }
 .filter-status-icon.status-blocked { color: var(--status-blocked); }
 .filter-status-icon.status-done { color: var(--status-done); }
 .filter-status-icon.status-canceled { color: var(--status-canceled); }
@@ -2014,6 +2024,7 @@ kbd {
 .status-icon-todo { color: var(--status-todo); }
 .status-icon-progress { color: var(--status-progress); }
 .status-icon-review { color: var(--status-review); }
+.status-icon-test { color: var(--status-test); }
 .status-icon-blocked { color: var(--status-blocked); }
 .status-icon-done { color: var(--status-done); }
 .status-icon-canceled { color: var(--status-canceled); }
@@ -4367,6 +4378,12 @@ kbd {
   color: #d99716;
 }
 
+.issue-relation-group.is-parent {
+  margin-bottom: 8px;
+  padding-bottom: 8px;
+  border-bottom: var(--border-hairline) solid var(--border);
+}
+
 .issue-relation-group.is-blocks > header > span {
   color: var(--status-blocked);
 }
@@ -4433,6 +4450,7 @@ kbd {
 
 .detail-property-row .status-icon-progress { color: var(--status-progress); }
 .detail-property-row .status-icon-review { color: var(--status-review); }
+.detail-property-row .status-icon-test { color: var(--status-test); }
 .detail-property-row .status-icon-blocked { color: var(--status-blocked); }
 .detail-property-row .status-icon-done { color: var(--status-done); }
 .detail-property-row .status-icon-canceled { color: var(--status-canceled); }
@@ -6961,11 +6979,53 @@ kbd {
   padding: 6px;
 }
 
+.task-property-popover.is-searchable {
+  width: 260px;
+}
+
+.task-property-search {
+  display: flex;
+  align-items: center;
+  height: 34px;
+  gap: 7px;
+  padding: 0 8px 5px;
+  border-bottom: var(--border-hairline) solid var(--border);
+}
+
+.task-property-search svg {
+  flex: 0 0 auto;
+  width: 14px;
+  height: 14px;
+  color: var(--text-tertiary);
+}
+
+.task-property-search input {
+  min-width: 0;
+  width: 100%;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  color: var(--text-primary);
+  font: inherit;
+}
+
+.task-property-empty {
+  margin: 0;
+  padding: 16px 8px;
+  color: var(--text-tertiary);
+  font-size: 12px;
+  text-align: center;
+}
+
 .task-property-options {
   display: flex;
   flex-direction: column;
   max-height: min(390px, calc(100vh - 28px));
   overflow-y: auto;
+}
+
+.task-property-popover.is-searchable .task-property-options {
+  max-height: min(350px, calc(100vh - 68px));
 }
 
 .task-property-option {
@@ -9621,12 +9681,19 @@ kbd {
   --column-status-background: rgba(49, 124, 255, .1);
 }
 
+.board-column.status-in_test,
+.issue-reference-inline.issue-reference-status-in_test {
+  --column-status-color: #e89b2d;
+  --column-status-background: rgba(232, 155, 45, .12);
+}
+
 .board-column.status-blocked,
 .issue-reference-inline.issue-reference-status-blocked {
   --column-status-color: #e5484d;
   --column-status-background: rgba(229, 72, 77, .1);
 }
 
+.board-column.status-done,
 .issue-reference-inline.issue-reference-status-done {
   --column-status-color: var(--status-done);
   --column-status-background: color-mix(in srgb, var(--status-done) 10%, transparent);
@@ -9640,6 +9707,8 @@ kbd {
 .board-column.status-todo .column-header,
 .board-column.status-in_progress .column-header,
 .board-column.status-in_review .column-header,
+.board-column.status-in_test .column-header,
+.board-column.status-done .column-header,
 .board-column.status-blocked .column-header {
   background: var(--column-status-background);
   color: var(--column-status-color);
@@ -9770,7 +9839,8 @@ kbd {
   min-height: 16px;
 }
 
-.task-card.status-in_review .card-topline {
+.task-card.status-in_review .card-topline,
+.task-card.status-in_test .card-topline {
   height: 20px;
   min-height: 20px;
 }
@@ -9796,7 +9866,8 @@ kbd {
   pointer-events: auto;
 }
 
-.task-card.status-in_review:hover .task-card-complete {
+.task-card.status-in_review:hover .task-card-complete,
+.task-card.status-in_test:hover .task-card-complete {
   display: inline-flex;
 }
 
@@ -9891,7 +9962,8 @@ kbd {
   gap: 4px;
 }
 
-.priority-chip {
+.priority-chip,
+.estimate-chip {
   display: inline-flex;
   align-items: center;
   flex: 0 0 auto;
@@ -9906,6 +9978,11 @@ kbd {
   font-weight: 450;
   line-height: 18px;
   white-space: nowrap;
+}
+
+.estimate-chip svg {
+  width: 14px;
+  height: 14px;
 }
 
 .project-chip {
@@ -11513,6 +11590,7 @@ kbd {
 .dashboard-status-row.status-todo { --status-color: var(--status-todo); }
 .dashboard-status-row.status-in_progress { --status-color: var(--status-progress); }
 .dashboard-status-row.status-in_review { --status-color: var(--status-review); }
+.dashboard-status-row.status-in_test { --status-color: var(--status-test); }
 .dashboard-status-row.status-blocked { --status-color: var(--status-blocked); }
 .dashboard-status-row.status-done { --status-color: var(--status-done); }
 .dashboard-status-row.status-canceled { --status-color: var(--status-canceled); }
@@ -11746,6 +11824,7 @@ kbd {
 .issue-list-group.status-todo { --status-color: var(--status-todo); }
 .issue-list-group.status-in_progress { --status-color: var(--status-progress); }
 .issue-list-group.status-in_review { --status-color: var(--status-review); }
+.issue-list-group.status-in_test { --status-color: var(--status-test); }
 .issue-list-group.status-blocked { --status-color: var(--status-blocked); }
 .issue-list-group.status-done { --status-color: var(--status-done); }
 .issue-list-group.status-canceled { --status-color: var(--status-canceled); }
@@ -12241,6 +12320,7 @@ kbd {
 .gantt-status-todo { --gantt-row-color: var(--status-todo); }
 .gantt-status-in_progress { --gantt-row-color: var(--status-progress); }
 .gantt-status-in_review { --gantt-row-color: var(--status-review); }
+.gantt-status-in_test { --gantt-row-color: var(--status-test); }
 .gantt-status-blocked { --gantt-row-color: var(--status-blocked); }
 .gantt-status-done { --gantt-row-color: var(--status-done); }
 .gantt-status-canceled { --gantt-row-color: var(--status-todo); }

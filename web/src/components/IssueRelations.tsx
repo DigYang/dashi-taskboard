@@ -253,18 +253,20 @@ function IssueRelationRow({
         <span className="issue-relation-title">{issue.title}</span>
         {showAssignee && <ActorAvatar actor={issue.assignee} className="issue-relation-assignee" />}
       </button>
-      <button
-        className="issue-relation-remove"
-        type="button"
-        aria-label={text(
-          `移除 ${issue.externalKey ?? issue.identifier}`,
-          `Remove ${issue.externalKey ?? issue.identifier}`,
-        )}
-        disabled={removing}
-        onClick={onRemove}
-      >
-        <LinearIcon name="close" />
-      </button>
+      {!issue.externalOnly && (
+        <button
+          className="issue-relation-remove"
+          type="button"
+          aria-label={text(
+            `移除 ${issue.externalKey ?? issue.identifier}`,
+            `Remove ${issue.externalKey ?? issue.identifier}`,
+          )}
+          disabled={removing}
+          onClick={onRemove}
+        >
+          <LinearIcon name="close" />
+        </button>
+      )}
     </div>
   );
 }
@@ -286,6 +288,14 @@ export function IssueParentLink({
     && !excluded.has(candidate.id)
     && candidate.id !== parent?.id
   ));
+  const openParent = () => {
+    if (!parent) return;
+    if (parent.externalOnly && parent.externalUrl) {
+      window.open(parent.externalUrl, "_blank", "noopener,noreferrer");
+      return;
+    }
+    onOpenTask(parent);
+  };
 
   return (
     <div className={`issue-parent-link${parent ? " has-parent" : ""}`}>
@@ -295,7 +305,7 @@ export function IssueParentLink({
           <IssueRelationRow
             issue={parent}
             removing={saving}
-            onOpen={() => onOpenTask(parent)}
+            onOpen={openParent}
             onRemove={() => {
               setSaving(true);
               void onRemoveRelation(task, "parent", parent.id)
@@ -422,10 +432,59 @@ export function IssueRelationSidebar({
 }: RelationActions) {
   const { text } = useTaskboardI18n();
   const [savingKey, setSavingKey] = useState<string | null>(null);
+  const parent = task.relations.parent;
+  const excludedParents = descendantIds(task, tasks);
+  excludedParents.add(task.id);
+  const parentCandidates = tasks.filter((candidate) => (
+    candidate.archivedAt === null
+    && !excludedParents.has(candidate.id)
+    && candidate.id !== parent?.id
+  ));
+  const openParent = () => {
+    if (!parent) return;
+    if (parent.externalOnly && parent.externalUrl) {
+      window.open(parent.externalUrl, "_blank", "noopener,noreferrer");
+      return;
+    }
+    onOpenTask(parent);
+  };
 
   return (
     <section className="issue-relation-sidebar" aria-labelledby="relations-heading">
       <h2 id="relations-heading">{text("关系", "Relations")}</h2>
+      <div className="issue-relation-group is-parent">
+        <header>
+          <span><LinearIcon name="branch" />{text("父议题", "Parent issue")}</span>
+          <IssuePicker
+            label={parent
+              ? text("更换父议题", "Change parent issue")
+              : text("设置父议题", "Set parent issue")}
+            candidates={parentCandidates}
+            disabled={savingKey !== null}
+            onSelect={async (candidate) => {
+              setSavingKey(`parent:${candidate.id}`);
+              try {
+                await onAddRelation(task, "parent", candidate.id);
+              } finally {
+                setSavingKey(null);
+              }
+            }}
+          />
+        </header>
+        {parent && (
+          <IssueRelationRow
+            issue={parent}
+            removing={savingKey === `parent:${parent.id}`}
+            onOpen={openParent}
+            onRemove={() => {
+              setSavingKey(`parent:${parent.id}`);
+              void onRemoveRelation(task, "parent", parent.id)
+                .catch(() => undefined)
+                .finally(() => setSavingKey(null));
+            }}
+          />
+        )}
+      </div>
       {RELATION_GROUPS.map((group) => {
         const label = text(group.chineseLabel, group.englishLabel);
         const issues = task.relations[group.field];

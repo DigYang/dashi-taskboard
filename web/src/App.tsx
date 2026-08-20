@@ -101,6 +101,7 @@ import {
   TaskboardLanguageProvider,
 } from "./i18n";
 import {
+  BOARD_STATUS_OPTIONS,
   MAIN_STATUSES,
   type OtherTaskTab,
 } from "./issueBoardStatuses";
@@ -153,6 +154,7 @@ type DetailSourceScroll =
   | { projectId: string; view: "list"; scrollTop: number };
 type GanttZoom = "day" | "week" | "month";
 type BoardCardDisplay = { cover: boolean; body: boolean };
+type BoardColumnVisibility = Record<string, TaskStatus[]>;
 type ActionError = string | readonly [string, string];
 type ProjectLoadError = {
   source: "projects";
@@ -328,6 +330,7 @@ const PROJECT_CODEX_IDENTITIES_KEY = "taskboard.projectCodexIdentities.v1";
 const PROJECT_AUTOMATIONS_KEY = "taskboard.projectAutomations.v1";
 const LINEAR_SYNC_AUTOMATION_KEY = "taskboard.linearSyncAutomation.v1";
 const BOARD_CARD_DISPLAY_KEY = "taskboard.board-card-display.v1";
+const BOARD_COLUMN_VISIBILITY_KEY = "taskboard.board-column-visibility.v1";
 const ISSUE_READ_KEY_PREFIX = "taskboard.issue-read.v1";
 const FIRST_USE_COMPLETE_KEY = "taskboard.first-use-complete.v1";
 const DEFAULT_AUTOMATION_OPTIONS = {
@@ -366,6 +369,20 @@ function readBoardCardDisplay(): BoardCardDisplay {
     };
   } catch {
     return { cover: true, body: false };
+  }
+}
+
+function readBoardColumnVisibility(): BoardColumnVisibility {
+  try {
+    const value = JSON.parse(taskboardStorage.getItem(BOARD_COLUMN_VISIBILITY_KEY) ?? "{}");
+    if (!value || typeof value !== "object" || Array.isArray(value)) return {};
+    return Object.fromEntries(Object.entries(value).flatMap(([projectId, statuses]) => {
+      if (!Array.isArray(statuses)) return [];
+      const visible = BOARD_STATUS_OPTIONS.filter((status) => statuses.includes(status));
+      return [[projectId, visible]];
+    }));
+  } catch {
+    return {};
   }
 }
 
@@ -580,6 +597,7 @@ function taskToDraft(task: Task): TaskDraft {
     description: task.description,
     status: task.status,
     priority: task.priority,
+    estimate: task.estimate,
     labels: task.labels,
     developmentContext: task.developmentContext,
     startDate: task.startDate,
@@ -769,6 +787,7 @@ export function App() {
   const [filters, setFilters] = useState(readTaskFilters);
   const [boardView, setBoardView] = useState<BoardView>(() => readProjectBoardView(initialProjectId));
   const [boardCardDisplay, setBoardCardDisplay] = useState<BoardCardDisplay>(readBoardCardDisplay);
+  const [boardColumnVisibility, setBoardColumnVisibility] = useState<BoardColumnVisibility>(readBoardColumnVisibility);
   const [dashboardSummaryAnimatedProjectId, setDashboardSummaryAnimatedProjectId] = useState<string | null>(null);
   const [ganttZoom, setGanttZoom] = useState<GanttZoom>("week");
   const [ganttHideCompleted, setGanttHideCompleted] = useState(false);
@@ -929,6 +948,10 @@ export function App() {
     ...DEFAULT_USER_ACTOR,
     name: text("本地用户", "Local user"),
   };
+  const editorCurrentUser = isLinearProject && linearConnection?.displayName
+    ? linearConnection.members.find((member) => member.name === linearConnection.displayName)
+      ?? { ...currentUser, name: linearConnection.displayName, avatarUrl: null }
+    : currentUser;
   const selectedDeviceWorkspacePath = selectedProjectId === GLOBAL_PROJECT_ID || isAllProjects
     ? undefined
     : deviceWorkspacePaths[selectedProjectId];
@@ -2121,7 +2144,7 @@ export function App() {
         && !event.ctrlKey
         && selectedProjectId
         && !isAllProjects
-        && !isExternalProject
+        && !isJiraProject
         && boardView !== "workflow"
       ) {
         event.preventDefault();
@@ -2143,7 +2166,7 @@ export function App() {
 
     window.addEventListener("keydown", handleShortcut);
     return () => window.removeEventListener("keydown", handleShortcut);
-  }, [boardView, contextMenu, detailTaskId, editor, isAllProjects, isExternalProject, projectMenuOpen, selectedProjectId]);
+  }, [boardView, contextMenu, detailTaskId, editor, isAllProjects, isJiraProject, projectMenuOpen, selectedProjectId]);
 
   const filteredTasks = useMemo(() => {
     return tasks.filter(
@@ -2195,16 +2218,17 @@ export function App() {
   }, [filteredTasks]);
 
   const hasBlockedTasks = tasks.some((task) => task.status === "blocked");
-  const mainStatuses = hasBlockedTasks
+  const defaultMainStatuses = hasBlockedTasks
     ? MAIN_STATUSES
     : MAIN_STATUSES.filter((status) => status !== "blocked");
+  const mainStatuses = boardColumnVisibility[selectedProjectId] ?? defaultMainStatuses;
   const mainBoardMinWidth = (mainStatuses.length * 300) + ((mainStatuses.length - 1) * 24);
   const mainBoardMaxWidth = (mainStatuses.length * 400) + ((mainStatuses.length - 1) * 24);
   const otherTasksColumnCount = mainStatuses.length + 1;
   const otherTasksWidth = `clamp(300px, calc(${100 / otherTasksColumnCount}% - ${(36 + (mainStatuses.length * 24)) / otherTasksColumnCount}px), 400px)`;
 
   const taskPresentations = useMemo(() => Object.fromEntries(tasks.map((task) => {
-    const unread = (task.status === "in_review" || task.status === "blocked")
+    const unread = (task.status === "in_review" || task.status === "in_test" || task.status === "blocked")
       && readActivityKeys[task.id] !== task.activityKey;
     const runningNativeThreadId = hostContext?.threadRunning
       ? hostContext.threadId ?? null
@@ -2252,6 +2276,18 @@ export function App() {
   function updateBoardCardDisplay(value: BoardCardDisplay) {
     setBoardCardDisplay(value);
     taskboardStorage.setItem(BOARD_CARD_DISPLAY_KEY, JSON.stringify(value));
+  }
+
+  function toggleBoardStatus(status: TaskStatus) {
+    setBoardColumnVisibility((current) => {
+      const visible = current[selectedProjectId] ?? [...defaultMainStatuses];
+      const nextVisible = BOARD_STATUS_OPTIONS.filter((candidate) => (
+        candidate === status ? !visible.includes(candidate) : visible.includes(candidate)
+      ));
+      const next = { ...current, [selectedProjectId]: nextVisible };
+      taskboardStorage.setItem(BOARD_COLUMN_VISIBILITY_KEY, JSON.stringify(next));
+      return next;
+    });
   }
 
   async function saveEditor(
@@ -2407,7 +2443,7 @@ export function App() {
     } else if (editor.task) {
       const previous = editor.task;
       const previousAssigneeTarget = assigneeTargetForActor(previous.assignee, currentUser);
-      if (!draft.assigneeTarget || previousAssigneeTarget) {
+      if ((!draft.assigneeTarget && !draft.assigneeId) || previousAssigneeTarget) {
         pushUndo(
           null,
           () => restoreTaskDetails(previous, saved, previousAssigneeTarget),
@@ -2529,11 +2565,13 @@ export function App() {
 
   async function updateTaskProperties(task: Task, changes: Partial<TaskDraft>): Promise<Task> {
     const previous = task;
-    const { assigneeTarget, ...taskChanges } = changes;
-    const optimisticAssignee = assigneeTarget
-      ? actorForAssigneeTarget(assigneeTarget, currentUser)
-      : task.assignee;
-    const optimisticParticipants = assigneeTarget
+    const { assigneeTarget, assigneeId, ...taskChanges } = changes;
+    const linearAssignee = assigneeId
+      ? linearConnection?.members.find((member) => member.id === assigneeId)
+      : undefined;
+    const optimisticAssignee = linearAssignee
+      ?? (assigneeTarget ? actorForAssigneeTarget(assigneeTarget, currentUser) : task.assignee);
+    const optimisticParticipants = (assigneeTarget || assigneeId)
       && !task.participants.some((participant) => actorKey(participant) === actorKey(optimisticAssignee))
       ? [...task.participants, optimisticAssignee]
       : task.participants;
@@ -2550,7 +2588,7 @@ export function App() {
         candidate.id === updated.id ? updated : candidate,
       )));
       const previousAssigneeTarget = assigneeTargetForActor(previous.assignee, currentUser);
-      if (!assigneeTarget || previousAssigneeTarget) {
+      if ((!assigneeTarget && !assigneeId) || previousAssigneeTarget) {
         pushUndo(
           null,
           () => restoreTaskDetails(previous, updated, previousAssigneeTarget),
@@ -3603,19 +3641,6 @@ export function App() {
                       type="button"
                       role="menuitem"
                       disabled={openingProjectId !== null}
-                      onClick={openJiraDialog}
-                    >
-                      <LinearIcon className="project-avatar" name="link" />
-                      <span>
-                        {jiraConnection?.configured
-                          ? text("Jira 设置", "Jira settings")
-                          : text("连接 Jira", "Connect Jira")}
-                      </span>
-                    </button>
-                    <button
-                      type="button"
-                      role="menuitem"
-                      disabled={openingProjectId !== null}
                       onClick={openLinearDialog}
                     >
                       <LinearIcon className="project-avatar" name="link" />
@@ -3680,7 +3705,7 @@ export function App() {
                 <LinearIcon name="recurrence" />
               </button>
             )}
-            {selectedProject && !isExternalProject && boardView !== "workflow" && (
+            {selectedProject && !isJiraProject && boardView !== "workflow" && (
               <button
                 className="icon-button header-create-button"
                 type="button"
@@ -3805,7 +3830,10 @@ export function App() {
               <BoardCardDisplayMenu
                 cover={boardCardDisplay.cover}
                 body={boardCardDisplay.body}
+                statuses={BOARD_STATUS_OPTIONS}
+                visibleStatuses={mainStatuses}
                 onChange={updateBoardCardDisplay}
+                onToggleStatus={toggleBoardStatus}
               />
             )}
             {boardView === "issues" && (
@@ -3852,7 +3880,8 @@ export function App() {
             task={detailTask}
             tasks={tasks}
             referenceTasks={referenceTasks}
-            currentUser={currentUser}
+            currentUser={editorCurrentUser}
+            availableAssignees={detailTask.source === "linear" ? linearConnection?.members : undefined}
             availableLabels={availableLabels}
             developmentScan={developmentScan}
             developmentScanLoading={developmentScanLoading}
@@ -4009,7 +4038,7 @@ export function App() {
                         currentUser={currentUser}
                         showCover={boardCardDisplay.cover}
                         showBody={boardCardDisplay.body}
-                        createEnabled={!isAllProjects && !isExternalProject}
+                        createEnabled={!isAllProjects && !isJiraProject}
                         onCreateLabel={persistProjectLabel}
                         onCreate={(initialStatus) => setEditor({ task: null, status: initialStatus })}
                         onEdit={openTaskDetail}
@@ -4049,7 +4078,7 @@ export function App() {
                     restoringTaskId={restoringTaskId}
                     deletingTaskId={deletingArchivedTaskId}
                     onTabChange={setOtherTasksTab}
-                    onCreate={isExternalProject || isAllProjects
+                    onCreate={isJiraProject || isAllProjects
                       ? undefined
                       : (initialStatus) => setEditor({ task: null, status: initialStatus })}
                     onRestore={(task) => void restoreArchivedTask(task)}
@@ -4304,10 +4333,12 @@ export function App() {
             ? null
             : newTaskDraft.draft}
           labels={availableLabels}
-          currentUser={currentUser}
+          currentUser={editorCurrentUser}
+          availableAssignees={isLinearProject ? linearConnection?.members : undefined}
           developmentScan={developmentScan}
           developmentScanLoading={developmentScanLoading}
-          onCreateLabel={persistProjectLabel}
+          showDevelopmentContext={!isExternalProject}
+          onCreateLabel={isExternalProject ? undefined : persistProjectLabel}
           onCancel={(draft) => {
             if (!editor.task) {
               setNewTaskDraft(draft ? { projectId: selectedProjectId, draft } : null);

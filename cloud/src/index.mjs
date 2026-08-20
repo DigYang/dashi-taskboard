@@ -10,6 +10,7 @@ const TASK_STATUSES = [
   "todo",
   "in_progress",
   "in_review",
+  "in_test",
   "blocked",
   "done",
   "canceled",
@@ -725,7 +726,7 @@ function taskFromRow(row) {
     projectId: row.project_id,
     title: row.title,
     description: row.description,
-    status: row.status,
+    status: row.in_test === 1 ? "in_test" : row.status,
     priority: row.priority,
     labels: JSON.parse(row.labels),
     sortOrder: row.sort_order,
@@ -1494,7 +1495,7 @@ async function listTasks(env, filters) {
     values.push(filters.projectId);
   }
   if (filters.status) {
-    where.push("status = ?");
+    where.push("CASE WHEN in_test = 1 THEN 'in_test' ELSE status END = ?");
     values.push(filters.status);
   }
   if (filters.archived === "false") {
@@ -1507,14 +1508,15 @@ async function listTasks(env, filters) {
       SELECT * FROM tasks
       ${where.length > 0 ? `WHERE ${where.join(" AND ")}` : ""}
       ORDER BY
-        CASE status
+        CASE CASE WHEN in_test = 1 THEN 'in_test' ELSE status END
           WHEN 'backlog' THEN 1
           WHEN 'todo' THEN 2
           WHEN 'in_progress' THEN 3
           WHEN 'in_review' THEN 4
-          WHEN 'blocked' THEN 5
-          WHEN 'done' THEN 6
-          WHEN 'canceled' THEN 7
+          WHEN 'in_test' THEN 5
+          WHEN 'blocked' THEN 6
+          WHEN 'done' THEN 7
+          WHEN 'canceled' THEN 8
         END,
         sort_order,
         created_at,
@@ -1559,7 +1561,9 @@ async function createTask(env, input, actor) {
     const row = await env.DB.prepare(`
       SELECT COALESCE(MAX(sort_order), 0) AS maximum
       FROM tasks
-      WHERE project_id = ? AND status = ? AND archived_at IS NULL
+      WHERE project_id = ?
+        AND CASE WHEN in_test = 1 THEN 'in_test' ELSE status END = ?
+        AND archived_at IS NULL
     `).bind(input.projectId, input.status).first();
     sortOrder = row.maximum + 1000;
   }
@@ -1569,7 +1573,7 @@ async function createTask(env, input, actor) {
   const results = await env.DB.batch([
     env.DB.prepare(`
       INSERT INTO tasks (
-        id, identifier, project_id, title, description, status, priority, labels,
+        id, identifier, project_id, title, description, status, in_test, priority, labels,
         sort_order, thread_id, thread_codex_project_id, thread_codex_project_kind,
         thread_codex_host_id, thread_workspace_path,
         creator_type, creator_id, creator_name, creator_avatar_url,
@@ -1589,7 +1593,7 @@ async function createTask(env, input, actor) {
           ), 1)
         ) AS TEXT),
         projects.id,
-        ?, ?, ?, ?, ?, ?,
+        ?, ?, ?, ?, ?, ?, ?,
         ?, ?, ?, ?, ?,
         ?, ?, ?, ?,
         ?, ?, ?, ?,
@@ -1605,7 +1609,8 @@ async function createTask(env, input, actor) {
       `${prefix}-[0-9]*`,
       input.title,
       input.description,
-      input.status,
+      input.status === "in_test" ? "in_review" : input.status,
+      input.status === "in_test" ? 1 : 0,
       input.priority,
       JSON.stringify(input.labels),
       sortOrder,
@@ -1740,6 +1745,9 @@ async function updateTask(env, id, input, actor) {
     } else if (key === "recurrence") {
       assignments.push("recurrence_interval = ?", "recurrence_unit = ?");
       values.push(value?.interval ?? null, value?.unit ?? null);
+    } else if (key === "status") {
+      assignments.push("status = ?", "in_test = ?");
+      values.push(value === "in_test" ? "in_review" : value, value === "in_test" ? 1 : 0);
     } else {
       assignments.push(`${columns[key]} = ?`);
       values.push(key === "labels" ? JSON.stringify(value) : value);
@@ -1752,7 +1760,9 @@ async function updateTask(env, id, input, actor) {
     const row = await env.DB.prepare(`
       SELECT MIN(sort_order) AS minimum
       FROM tasks
-      WHERE project_id = ? AND status = ? AND archived_at IS NULL AND id != ?
+      WHERE project_id = ?
+        AND CASE WHEN in_test = 1 THEN 'in_test' ELSE status END = ?
+        AND archived_at IS NULL AND id != ?
     `).bind(placementProjectId, input.changes.status, current.id).first();
     assignments.push("sort_order = ?");
     values.push(row?.minimum == null ? 1000 : row.minimum - 1000);
@@ -1911,14 +1921,18 @@ async function moveTask(env, id, input, actor) {
     const row = await env.DB.prepare(`
       SELECT MIN(sort_order) AS minimum
       FROM tasks
-      WHERE project_id = ? AND status = ? AND archived_at IS NULL AND id != ?
+      WHERE project_id = ?
+        AND CASE WHEN in_test = 1 THEN 'in_test' ELSE status END = ?
+        AND archived_at IS NULL AND id != ?
     `).bind(current.project_id, input.status, current.id).first();
     sortOrder = row?.minimum == null ? 1000 : row.minimum - 1000;
   } else if (sortOrder === undefined) {
     const row = await env.DB.prepare(`
       SELECT COALESCE(MAX(sort_order), 0) AS maximum
       FROM tasks
-      WHERE project_id = ? AND status = ? AND archived_at IS NULL AND id != ?
+      WHERE project_id = ?
+        AND CASE WHEN in_test = 1 THEN 'in_test' ELSE status END = ?
+        AND archived_at IS NULL AND id != ?
     `).bind(current.project_id, input.status, current.id).first();
     sortOrder = row.maximum + 1000;
   }
@@ -1932,13 +1946,15 @@ async function moveTask(env, id, input, actor) {
     UPDATE tasks
     SET
       status = ?,
+      in_test = ?,
       sort_order = ?,
       ${threadAssignment}
       version = version + 1,
       updated_at = ?
     WHERE id = ? AND version = ?
   `).bind(
-    input.status,
+    input.status === "in_test" ? "in_review" : input.status,
+    input.status === "in_test" ? 1 : 0,
     sortOrder,
     ...(storedBinding ?? []),
     timestamp,

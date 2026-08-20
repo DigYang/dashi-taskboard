@@ -225,8 +225,9 @@ function taskFromRow(row) {
     projectId: row.project_id,
     title: row.title,
     description: row.description,
-    status: row.status,
+    status: row.in_test === 1 ? "in_test" : row.status,
     priority: row.priority,
+    estimate: row.estimate ?? null,
     labels: JSON.parse(row.labels),
     sortOrder: row.sort_order,
     threadId: row.thread_id,
@@ -255,6 +256,7 @@ function taskFromRow(row) {
         ? "linear"
         : "local",
     externalOrigin: row.external_origin ?? null,
+    externalId: row.external_id ?? null,
     externalKey: row.external_key ?? null,
     externalUrl: row.external_url ?? null,
     archivedAt: row.archived_at,
@@ -440,7 +442,9 @@ export class TaskboardDatabase {
         status TEXT NOT NULL CHECK (status IN (
           'backlog', 'todo', 'in_progress', 'in_review', 'blocked', 'done', 'canceled'
         )),
+        in_test INTEGER NOT NULL DEFAULT 0 CHECK (in_test IN (0, 1)),
         priority TEXT NOT NULL CHECK (priority IN ('none', 'urgent', 'high', 'medium', 'low')),
+        estimate REAL,
         labels TEXT NOT NULL DEFAULT '[]',
         sort_order REAL NOT NULL,
         thread_id TEXT,
@@ -469,6 +473,7 @@ export class TaskboardDatabase {
         external_id TEXT,
         external_key TEXT,
         external_url TEXT,
+        external_parent TEXT,
         archived_at TEXT,
         version INTEGER NOT NULL DEFAULT 1 CHECK (version > 0),
         created_at TEXT NOT NULL,
@@ -650,6 +655,9 @@ export class TaskboardDatabase {
     }
     this.#migrateTaskStatuses();
     const migratedTaskColumns = this.database.prepare("PRAGMA table_info(tasks)").all();
+    if (!migratedTaskColumns.some((column) => column.name === "in_test")) {
+      this.database.exec("ALTER TABLE tasks ADD COLUMN in_test INTEGER NOT NULL DEFAULT 0 CHECK (in_test IN (0, 1))");
+    }
     if (!migratedTaskColumns.some((column) => column.name === "creator_type")) {
       this.database.exec("ALTER TABLE tasks ADD COLUMN creator_type TEXT NOT NULL DEFAULT 'user'");
     }
@@ -679,6 +687,12 @@ export class TaskboardDatabase {
     }
     if (!migratedTaskColumns.some((column) => column.name === "external_url")) {
       this.database.exec("ALTER TABLE tasks ADD COLUMN external_url TEXT");
+    }
+    if (!migratedTaskColumns.some((column) => column.name === "external_parent")) {
+      this.database.exec("ALTER TABLE tasks ADD COLUMN external_parent TEXT");
+    }
+    if (!migratedTaskColumns.some((column) => column.name === "estimate")) {
+      this.database.exec("ALTER TABLE tasks ADD COLUMN estimate REAL");
     }
     this.database.exec(`
       DROP INDEX IF EXISTS tasks_external_source_id;
@@ -1069,7 +1083,7 @@ export class TaskboardDatabase {
       }
       const insertTask = this.database.prepare(`
         INSERT INTO tasks (
-          id, identifier, project_id, title, description, status, priority, labels,
+          id, identifier, project_id, title, description, status, in_test, priority, labels,
           sort_order, thread_id, thread_codex_project_id, thread_codex_project_kind,
           thread_codex_host_id, thread_workspace_path,
           creator_type, creator_id, creator_name, creator_avatar_url,
@@ -1079,7 +1093,7 @@ export class TaskboardDatabase {
           external_source, external_origin, external_id, external_key, external_url,
           archived_at, version, created_at, updated_at
         ) VALUES (
-          ?, ?, ?, ?, ?, ?, ?, ?,
+          ?, ?, ?, ?, ?, ?, ?, ?, ?,
           ?, NULL, NULL, NULL, NULL, NULL,
           ?, ?, ?, ?,
           ?, ?, ?, ?,
@@ -1091,7 +1105,7 @@ export class TaskboardDatabase {
       `);
       const updateTask = this.database.prepare(`
         UPDATE tasks SET
-          identifier = ?, title = ?, description = ?, status = ?, priority = ?, labels = ?,
+          identifier = ?, title = ?, description = ?, status = ?, in_test = ?, priority = ?, labels = ?,
           sort_order = ?, creator_type = ?, creator_id = ?, creator_name = ?, creator_avatar_url = ?,
           assignee_type = ?, assignee_id = ?, assignee_name = ?, assignee_avatar_url = ?,
           due_date = ?, external_origin = ?, external_id = ?, external_key = ?, external_url = ?,
@@ -1111,7 +1125,8 @@ export class TaskboardDatabase {
             JIRA_PROJECT_ID,
             issue.title,
             issue.description,
-            issue.status,
+            issue.status === "in_test" ? "in_review" : issue.status,
+            issue.status === "in_test" ? 1 : 0,
             issue.priority,
             labels,
             issue.sortOrder,
@@ -1137,7 +1152,7 @@ export class TaskboardDatabase {
         const changed = existing.identifier !== issue.identifier
           || existing.title !== issue.title
           || existing.description !== issue.description
-          || existing.status !== issue.status
+          || (existing.in_test === 1 ? "in_test" : existing.status) !== issue.status
           || existing.priority !== issue.priority
           || existing.labels !== labels
           || existing.sort_order !== issue.sortOrder
@@ -1160,7 +1175,8 @@ export class TaskboardDatabase {
           issue.identifier,
           issue.title,
           issue.description,
-          issue.status,
+          issue.status === "in_test" ? "in_review" : issue.status,
+          issue.status === "in_test" ? 1 : 0,
           issue.priority,
           labels,
           issue.sortOrder,
@@ -1234,32 +1250,32 @@ export class TaskboardDatabase {
       `);
       const insertTask = this.database.prepare(`
         INSERT INTO tasks (
-          id, identifier, project_id, title, description, status, priority, labels,
+          id, identifier, project_id, title, description, status, in_test, priority, labels,
           sort_order, thread_id, thread_codex_project_id, thread_codex_project_kind,
           thread_codex_host_id, thread_workspace_path,
           creator_type, creator_id, creator_name, creator_avatar_url,
           assignee_type, assignee_id, assignee_name, assignee_avatar_url,
           workflow_id, git_branch, worktree_path, worktree_branch,
-          start_date, due_date, recurrence_interval, recurrence_unit,
-          external_source, external_origin, external_id, external_key, external_url,
+          start_date, due_date, recurrence_interval, recurrence_unit, estimate,
+          external_source, external_origin, external_id, external_key, external_url, external_parent,
           archived_at, version, created_at, updated_at
         ) VALUES (
-          ?, ?, ?, ?, ?, ?, ?, ?,
+          ?, ?, ?, ?, ?, ?, ?, ?, ?,
           ?, NULL, NULL, NULL, NULL, NULL,
           ?, ?, ?, ?,
           ?, ?, ?, ?,
           NULL, NULL, NULL, NULL,
-          NULL, ?, NULL, NULL,
-          'linear', ?, ?, ?, ?,
+          NULL, ?, NULL, NULL, ?,
+          'linear', ?, ?, ?, ?, ?,
           NULL, 1, ?, ?
         )
       `);
       const updateTask = this.database.prepare(`
         UPDATE tasks SET
-          identifier = ?, title = ?, description = ?, status = ?, priority = ?, labels = ?,
+          identifier = ?, title = ?, description = ?, status = ?, in_test = ?, priority = ?, labels = ?,
           sort_order = ?, creator_type = ?, creator_id = ?, creator_name = ?, creator_avatar_url = ?,
           assignee_type = ?, assignee_id = ?, assignee_name = ?, assignee_avatar_url = ?,
-          due_date = ?, external_origin = ?, external_id = ?, external_key = ?, external_url = ?,
+          due_date = ?, estimate = ?, external_origin = ?, external_id = ?, external_key = ?, external_url = ?, external_parent = ?,
           archived_at = NULL,
           version = version + 1, updated_at = ?
         WHERE id = ?
@@ -1276,7 +1292,8 @@ export class TaskboardDatabase {
             LINEAR_PROJECT_ID,
             issue.title,
             issue.description,
-            issue.status,
+            issue.status === "in_test" ? "in_review" : issue.status,
+            issue.status === "in_test" ? 1 : 0,
             issue.priority,
             taskLabels,
             issue.sortOrder,
@@ -1289,10 +1306,12 @@ export class TaskboardDatabase {
             issue.assignee.name,
             issue.assignee.avatarUrl,
             issue.dueDate,
+            issue.estimate,
             issue.externalOrigin,
             issue.externalId,
             issue.externalKey,
             issue.externalUrl,
+            JSON.stringify(issue.parent),
             issue.createdAt,
             issue.updatedAt,
           );
@@ -1302,7 +1321,7 @@ export class TaskboardDatabase {
         const changed = existing.identifier !== issue.identifier
           || existing.title !== issue.title
           || existing.description !== issue.description
-          || existing.status !== issue.status
+          || (existing.in_test === 1 ? "in_test" : existing.status) !== issue.status
           || existing.priority !== issue.priority
           || existing.labels !== taskLabels
           || existing.sort_order !== issue.sortOrder
@@ -1315,17 +1334,20 @@ export class TaskboardDatabase {
           || existing.assignee_name !== issue.assignee.name
           || existing.assignee_avatar_url !== issue.assignee.avatarUrl
           || existing.due_date !== issue.dueDate
+          || existing.estimate !== issue.estimate
           || existing.external_origin !== issue.externalOrigin
           || existing.external_id !== issue.externalId
           || existing.external_key !== issue.externalKey
           || existing.external_url !== issue.externalUrl
+          || existing.external_parent !== JSON.stringify(issue.parent)
           || existing.archived_at !== null;
         if (!changed) continue;
         updateTask.run(
           issue.identifier,
           issue.title,
           issue.description,
-          issue.status,
+          issue.status === "in_test" ? "in_review" : issue.status,
+          issue.status === "in_test" ? 1 : 0,
           issue.priority,
           taskLabels,
           issue.sortOrder,
@@ -1338,10 +1360,12 @@ export class TaskboardDatabase {
           issue.assignee.name,
           issue.assignee.avatarUrl,
           issue.dueDate,
+          issue.estimate,
           issue.externalOrigin,
           issue.externalId,
           issue.externalKey,
           issue.externalUrl,
+          JSON.stringify(issue.parent),
           issue.updatedAt,
           existing.id,
         );
@@ -1856,7 +1880,7 @@ export class TaskboardDatabase {
       values.push(filters.projectId);
     }
     if (filters.status) {
-      where.push("status = ?");
+      where.push("CASE WHEN in_test = 1 THEN 'in_test' ELSE status END = ?");
       values.push(filters.status);
     }
     if (filters.archived === "false") {
@@ -1869,14 +1893,15 @@ export class TaskboardDatabase {
       SELECT * FROM tasks
       ${where.length > 0 ? `WHERE ${where.join(" AND ")}` : ""}
       ORDER BY
-        CASE status
+        CASE CASE WHEN in_test = 1 THEN 'in_test' ELSE status END
           WHEN 'backlog' THEN 1
           WHEN 'todo' THEN 2
           WHEN 'in_progress' THEN 3
           WHEN 'in_review' THEN 4
-          WHEN 'blocked' THEN 5
-          WHEN 'done' THEN 6
-          WHEN 'canceled' THEN 7
+          WHEN 'in_test' THEN 5
+          WHEN 'blocked' THEN 6
+          WHEN 'done' THEN 7
+          WHEN 'canceled' THEN 8
         END,
         sort_order,
         created_at,
@@ -1942,7 +1967,9 @@ export class TaskboardDatabase {
         const row = this.database.prepare(`
           SELECT MIN(sort_order) AS minimum
           FROM tasks
-          WHERE project_id = ? AND status = ? AND archived_at IS NULL
+          WHERE project_id = ?
+            AND CASE WHEN in_test = 1 THEN 'in_test' ELSE status END = ?
+            AND archived_at IS NULL
         `).get(input.projectId, input.status);
         sortOrder = row.minimum === null ? 1000 : row.minimum - 1000;
       }
@@ -1957,7 +1984,7 @@ export class TaskboardDatabase {
       );
       this.database.prepare(`
         INSERT INTO tasks (
-          id, identifier, project_id, title, description, status, priority, labels,
+          id, identifier, project_id, title, description, status, in_test, priority, labels,
           sort_order, thread_id, thread_codex_project_id, thread_codex_project_kind,
           thread_codex_host_id, thread_workspace_path,
           creator_type, creator_id, creator_name, creator_avatar_url,
@@ -1965,14 +1992,15 @@ export class TaskboardDatabase {
           workflow_id, git_branch, worktree_path, worktree_branch,
           start_date, due_date, recurrence_interval, recurrence_unit,
           archived_at, version, created_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, 1, ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, 1, ?, ?)
       `).run(
         id,
         identifier,
         input.projectId,
         input.title,
         input.description,
-        input.status,
+        input.status === "in_test" ? "in_review" : input.status,
+        input.status === "in_test" ? 1 : 0,
         input.priority,
         JSON.stringify(input.labels),
         sortOrder,
@@ -2049,6 +2077,7 @@ export class TaskboardDatabase {
       description: "description",
       status: "status",
       priority: "priority",
+      estimate: "estimate",
       labels: "labels",
       workflowId: "workflow_id",
       startDate: "start_date",
@@ -2064,6 +2093,11 @@ export class TaskboardDatabase {
           value?.type === "worktree" ? value.path : null,
           value?.type === "worktree" ? value.branch : null,
         );
+        continue;
+      }
+      if (key === "status") {
+        assignments.push("status = ?", "in_test = ?");
+        values.push(value === "in_test" ? "in_review" : value, value === "in_test" ? 1 : 0);
         continue;
       }
       if (key === "recurrence") {
@@ -2089,7 +2123,9 @@ export class TaskboardDatabase {
       const row = this.database.prepare(`
         SELECT MIN(sort_order) AS minimum
         FROM tasks
-        WHERE project_id = ? AND status = ? AND archived_at IS NULL AND id != ?
+        WHERE project_id = ?
+          AND CASE WHEN in_test = 1 THEN 'in_test' ELSE status END = ?
+          AND archived_at IS NULL AND id != ?
       `).get(placementProjectId, changes.status, current.id);
       assignments.push("sort_order = ?");
       values.push(row.minimum === null ? 1000 : row.minimum - 1000);
@@ -2153,14 +2189,18 @@ export class TaskboardDatabase {
       const row = this.database.prepare(`
         SELECT MIN(sort_order) AS minimum
         FROM tasks
-        WHERE project_id = ? AND status = ? AND archived_at IS NULL AND id != ?
+        WHERE project_id = ?
+          AND CASE WHEN in_test = 1 THEN 'in_test' ELSE status END = ?
+          AND archived_at IS NULL AND id != ?
       `).get(current.projectId, status, current.id);
       sortOrder = row.minimum === null ? 1000 : row.minimum - 1000;
     } else if (sortOrder === undefined) {
       const row = this.database.prepare(`
         SELECT COALESCE(MAX(sort_order), 0) AS maximum
         FROM tasks
-        WHERE project_id = ? AND status = ? AND archived_at IS NULL AND id != ?
+        WHERE project_id = ?
+          AND CASE WHEN in_test = 1 THEN 'in_test' ELSE status END = ?
+          AND archived_at IS NULL AND id != ?
       `).get(current.projectId, status, current.id);
       sortOrder = row.maximum + 1000;
     }
@@ -2175,9 +2215,17 @@ export class TaskboardDatabase {
     try {
       const result = this.database.prepare(`
         UPDATE tasks
-        SET status = ?, sort_order = ?, ${threadAssignment} version = version + 1, updated_at = ?
+        SET status = ?, in_test = ?, sort_order = ?, ${threadAssignment} version = version + 1, updated_at = ?
         WHERE id = ? AND version = ?
-      `).run(status, sortOrder, ...(storedBinding ?? []), timestamp, current.id, version);
+      `).run(
+        status === "in_test" ? "in_review" : status,
+        status === "in_test" ? 1 : 0,
+        sortOrder,
+        ...(storedBinding ?? []),
+        timestamp,
+        current.id,
+        version,
+      );
       if (result.changes !== 1) {
         this.#throwMissingOrConflict(id, version);
       }
@@ -2674,8 +2722,11 @@ export class TaskboardDatabase {
         )
       ORDER BY tasks.sort_order, tasks.created_at, tasks.id
     `).all(task.id, task.id, task.id);
+    const externalParent = !parent && row.external_parent
+      ? JSON.parse(row.external_parent)
+      : null;
     task.relations = {
-      parent: parent ? taskRelationSummaryFromRow(parent) : null,
+      parent: parent ? taskRelationSummaryFromRow(parent) : externalParent,
       subIssues: subIssues.map(taskRelationSummaryFromRow),
       blockedBy: blockedBy.map(taskRelationSummaryFromRow),
       blocks: blocks.map(taskRelationSummaryFromRow),

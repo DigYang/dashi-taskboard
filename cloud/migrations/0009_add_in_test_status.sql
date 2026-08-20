@@ -1,0 +1,3 @@
+ALTER TABLE tasks
+ADD COLUMN in_test INTEGER NOT NULL DEFAULT 0
+CHECK (in_test IN (0, 1));

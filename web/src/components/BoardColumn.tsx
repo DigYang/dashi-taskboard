@@ -18,6 +18,7 @@ export const STATUS_DETAILS: Record<
   todo: { label: "等待认领", tone: "todo" },
   in_progress: { label: "处理中", tone: "progress" },
   in_review: { label: "等你确认", tone: "review" },
+  in_test: { label: "测试中", tone: "test" },
   blocked: { label: "遇到阻碍", tone: "blocked" },
   done: { label: "完成", tone: "done" },
   canceled: { label: "取消", tone: "canceled" },
@@ -28,6 +29,7 @@ const STATUS_ICONS: Record<TaskStatus, TaskboardIconName> = {
   todo: "statusTodo",
   in_progress: "statusProgress",
   in_review: "statusReview",
+  in_test: "statusReview",
   blocked: "statusBlocked",
   done: "statusReview",
   canceled: "statusBlocked",
@@ -38,6 +40,7 @@ const COLUMN_STATUS_ICONS: Record<TaskStatus, TaskboardIconName> = {
   todo: "columnStatusTodo",
   in_progress: "columnStatusProgress",
   in_review: "columnStatusReview",
+  in_test: "columnStatusReview",
   blocked: "columnStatusBlocked",
   done: "statusReview",
   canceled: "statusBlocked",
@@ -47,6 +50,7 @@ const COLUMN_ADD_ICONS: Partial<Record<TaskStatus, TaskboardIconName>> = {
   todo: "columnAddTodo",
   in_progress: "columnAddProgress",
   in_review: "columnAddReview",
+  in_test: "columnAddReview",
   blocked: "columnAddBlocked",
 };
 

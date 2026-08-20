@@ -3,6 +3,7 @@ export const TASK_STATUSES = [
   "todo",
   "in_progress",
   "in_review",
+  "in_test",
   "blocked",
   "done",
   "canceled",
@@ -387,6 +388,8 @@ export interface TaskRelationSummary {
   priority: TaskPriority;
   assignee: ActorIdentity;
   archivedAt: string | null;
+  externalUrl?: string | null;
+  externalOnly?: boolean;
 }
 
 export interface TaskRelations {
@@ -417,6 +420,7 @@ export interface Task {
   description: string;
   status: TaskStatus;
   priority: TaskPriority;
+  estimate: number | null;
   labels: string[];
   sortOrder: number;
   threadId: string | null;
@@ -439,6 +443,7 @@ export interface Task {
   recurrence: Recurrence | null;
   source: "local" | "jira" | "linear";
   externalOrigin?: string | null;
+  externalId?: string | null;
   externalKey?: string | null;
   externalUrl: string | null;
   archivedAt: string | null;
@@ -465,6 +470,7 @@ export interface LinearConnection {
   organizationName: string | null;
   teams: string[];
   projects: string[];
+  members: ActorIdentity[];
   projectId: string;
   lastSyncedAt: string | null;
 }
@@ -542,8 +548,10 @@ export interface TaskDraft {
   description: string;
   status: TaskStatus;
   priority: TaskPriority;
+  estimate?: number | null;
   labels: string[];
   assigneeTarget?: AssigneeTarget;
+  assigneeId?: string;
   developmentContext: DevelopmentContext | null;
   startDate: string | null;
   dueDate: string | null;

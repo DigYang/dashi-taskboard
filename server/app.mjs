@@ -617,6 +617,14 @@ function parseAssigneeTarget(value) {
   return value;
 }
 
+function parseAssigneeId(value) {
+  const assigneeId = stringField(value, "assigneeId", { maxLength: 247 });
+  if (assigneeId === "") {
+    throw new ApiError(400, "INVALID_FIELD", "'assigneeId' cannot be empty");
+  }
+  return assigneeId;
+}
+
 function resolveAssignee(target, actor) {
   if (target === undefined) return actor;
   if (target === "codex-agent") return CODEX_AGENT_ACTOR;
@@ -638,7 +646,7 @@ function parseTaskCreate(body) {
   assertPlainObject(body);
   assertAllowedKeys(body, new Set([
     "projectId", "title", "description", "status", "priority", "labels", "sortOrder", "threadId", "threadBinding",
-    "assigneeTarget", "workflowId", "developmentContext", "startDate", "dueDate", "recurrence",
+    "assigneeTarget", "assigneeId", "workflowId", "developmentContext", "startDate", "dueDate", "recurrence",
   ]));
   const projectId = validateProjectId(body.projectId ?? DEFAULT_PROJECT_ID);
   const task = {
@@ -652,6 +660,7 @@ function parseTaskCreate(body) {
     threadId: parseThreadId(body.threadId),
     threadBinding: parseThreadBinding(body.threadBinding),
     assigneeTarget: parseAssigneeTarget(body.assigneeTarget),
+    assigneeId: parseAssigneeId(body.assigneeId),
     workflowId: parseWorkflowId(body.workflowId ?? null),
     developmentContext: parseDevelopmentContext(body.developmentContext ?? null),
     startDate: parseDueDate(body.startDate ?? null, "startDate"),
@@ -667,19 +676,26 @@ function parseTaskCreate(body) {
 function parseTaskPatch(body) {
   assertPlainObject(body);
   assertAllowedKeys(body, new Set([
-    "version", "projectId", "title", "description", "status", "priority", "labels", "threadId", "threadBinding",
-    "assigneeTarget", "workflowId", "developmentContext", "startDate", "dueDate", "recurrence",
+    "version", "projectId", "title", "description", "status", "priority", "estimate", "labels", "threadId", "threadBinding",
+    "assigneeTarget", "assigneeId", "workflowId", "developmentContext", "startDate", "dueDate", "recurrence",
   ]));
   const version = parseVersion(body.version);
   const threadId = parseThreadId(body.threadId);
   const threadBinding = parseThreadBinding(body.threadBinding);
   const assigneeTarget = parseAssigneeTarget(body.assigneeTarget);
+  const assigneeId = parseAssigneeId(body.assigneeId);
   const changes = {};
   if (body.projectId !== undefined) changes.projectId = validateProjectId(body.projectId);
   if (body.title !== undefined) changes.title = stringField(body.title, "title", { required: true, maxLength: 240 });
   if (body.description !== undefined) changes.description = stringField(body.description, "description", { maxLength: 100_000 });
   if (body.status !== undefined) changes.status = parseStatus(body.status);
   if (body.priority !== undefined) changes.priority = parsePriority(body.priority);
+  if (body.estimate !== undefined) {
+    if (body.estimate !== null && ![0, 1, 2, 3, 5, 8].includes(body.estimate)) {
+      throw new ApiError(400, "INVALID_FIELD", "'estimate' must be null, 0, 1, 2, 3, 5, or 8");
+    }
+    changes.estimate = body.estimate;
+  }
   if (body.labels !== undefined) changes.labels = parseLabels(body.labels);
   if (body.workflowId !== undefined) changes.workflowId = parseWorkflowId(body.workflowId);
   if (body.developmentContext !== undefined) changes.developmentContext = parseDevelopmentContext(body.developmentContext);
@@ -689,10 +705,10 @@ function parseTaskPatch(body) {
   if (changes.recurrence && body.dueDate === null) {
     throw new ApiError(400, "INVALID_FIELD", "A recurring issue requires 'dueDate'");
   }
-  if (Object.keys(changes).length === 0 && assigneeTarget === undefined) {
+  if (Object.keys(changes).length === 0 && assigneeTarget === undefined && assigneeId === undefined) {
     throw new ApiError(400, "INVALID_BODY", "PATCH requires at least one task field");
   }
-  return { version, changes, threadId, threadBinding, assigneeTarget };
+  return { version, changes, threadId, threadBinding, assigneeTarget, assigneeId };
 }
 
 function parseMove(body) {
@@ -2821,7 +2837,7 @@ export function createTaskboardServer(options = {}) {
         }
         if (request.method === "POST") {
           const actor = actorFromRequest(request);
-          const { assigneeTarget, ...parsedInput } = parseTaskCreate(await readJson(request));
+          const { assigneeTarget, assigneeId, ...parsedInput } = parseTaskCreate(await readJson(request));
           const input = resolveInputThreadBinding(parsedInput);
           if (input.projectId === JIRA_PROJECT_ID) {
             throw new ApiError(
@@ -2831,11 +2847,15 @@ export function createTaskboardServer(options = {}) {
             );
           }
           if (input.projectId === LINEAR_PROJECT_ID) {
-            throw new ApiError(
-              409,
-              "LINEAR_CREATE_UNAVAILABLE",
-              "请在 Linear 中新建议题，Taskboard 当前只同步已分配给你的任务",
-            );
+            if (input.recurrence !== null) {
+              throw new ApiError(409, "LINEAR_RECURRENCE_UNAVAILABLE", "Linear Issue 不支持 Taskboard 重复规则");
+            }
+            const task = await linear.createTask({ ...input, assigneeId });
+            events.emit("task.created", { task });
+            return sendJson(response, 201, { task });
+          }
+          if (assigneeId !== undefined) {
+            throw new ApiError(400, "INVALID_FIELD", "'assigneeId' is only available for Linear tasks");
           }
           const task = database.createTask({
             ...input,
@@ -2887,6 +2907,10 @@ export function createTaskboardServer(options = {}) {
           const { version, threadId, threadBinding } = resolveInputThreadBinding(
             parseArchive(await readJson(request)),
           );
+          const previousParent = relationType === "parent"
+            ? database.getTask(taskId)?.relations.parent ?? null
+            : null;
+          const actor = actorFromRequest(request);
           const result = database.addTaskRelation(
             taskId,
             version,
@@ -2894,8 +2918,38 @@ export function createTaskboardServer(options = {}) {
             relatedTaskId,
             threadId,
             threadBinding,
-            actorFromRequest(request),
+            actor,
           );
+          if (relationType === "parent" && result.task.source === "linear") {
+            try {
+              if (result.relatedTask.source !== "linear" || !result.relatedTask.externalId) {
+                throw new ApiError(409, "LINEAR_PARENT_UNAVAILABLE", "父议题不属于当前 Linear 连接");
+              }
+              await linear.updateTask(result.task, { parentId: result.relatedTask.externalId });
+            } catch (error) {
+              const removed = database.removeTaskRelation(
+                result.task.id,
+                result.task.version,
+                "parent",
+                result.relatedTask.id,
+                threadId,
+                threadBinding,
+                actor,
+              );
+              if (previousParent) {
+                database.addTaskRelation(
+                  removed.task.id,
+                  removed.task.version,
+                  "parent",
+                  previousParent.id,
+                  threadId,
+                  threadBinding,
+                  actor,
+                );
+              }
+              throw error;
+            }
+          }
           events.emit("task.relation.updated", result);
           return sendJson(response, 200, result);
         }
@@ -2903,6 +2957,7 @@ export function createTaskboardServer(options = {}) {
           const { version, threadId, threadBinding } = resolveInputThreadBinding(
             parseArchive(await readJson(request)),
           );
+          const actor = actorFromRequest(request);
           const result = database.removeTaskRelation(
             taskId,
             version,
@@ -2910,8 +2965,24 @@ export function createTaskboardServer(options = {}) {
             relatedTaskId,
             threadId,
             threadBinding,
-            actorFromRequest(request),
+            actor,
           );
+          if (relationType === "parent" && result.task.source === "linear") {
+            try {
+              await linear.updateTask(result.task, { parentId: null });
+            } catch (error) {
+              database.addTaskRelation(
+                result.task.id,
+                result.task.version,
+                "parent",
+                result.relatedTask.id,
+                threadId,
+                threadBinding,
+                actor,
+              );
+              throw error;
+            }
+          }
           events.emit("task.relation.updated", result);
           return sendJson(response, 200, result);
         }
@@ -3182,6 +3253,7 @@ export function createTaskboardServer(options = {}) {
             threadId,
             threadBinding,
             assigneeTarget,
+            assigneeId,
           } = resolveInputThreadBinding(parseTaskPatch(await readJson(request)));
           const current = database.getTask(id);
           if (!current) throw new ApiError(404, "TASK_NOT_FOUND", `Task '${id}' does not exist`);
@@ -3214,7 +3286,7 @@ export function createTaskboardServer(options = {}) {
             if (Object.hasOwn(changes, "projectId")) {
               throw new ApiError(409, "JIRA_PROJECT_MOVE_UNAVAILABLE", "Jira 任务不能移到本地项目");
             }
-            if (assigneeTarget !== undefined) {
+            if (assigneeTarget !== undefined || assigneeId !== undefined) {
               throw new ApiError(409, "JIRA_ASSIGNEE_UNAVAILABLE", "请在 Jira 中修改经办人");
             }
             const dueDate = Object.hasOwn(changes, "dueDate") ? changes.dueDate : current.dueDate;
@@ -3245,7 +3317,13 @@ export function createTaskboardServer(options = {}) {
             if (Object.hasOwn(changes, "recurrence") && changes.recurrence !== null) {
               throw new ApiError(409, "LINEAR_RECURRENCE_UNAVAILABLE", "Linear 同步任务不支持 Taskboard 重复规则");
             }
-            linearChanged = await linear.updateTask(current, changes);
+            linearChanged = await linear.updateTask(current, {
+              ...changes,
+              ...(assigneeId !== undefined ? { assigneeId } : {}),
+            });
+          }
+          if (current.source === "local" && assigneeId !== undefined) {
+            throw new ApiError(400, "INVALID_FIELD", "'assigneeId' is only available for Linear tasks");
           }
           if (assigneeTarget !== undefined) {
             changes.assignee = resolveAssignee(assigneeTarget, actor);

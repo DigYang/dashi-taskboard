@@ -48,9 +48,8 @@ export function taskStatusFromJira(status) {
   if (category === "new") {
     return includesAny(name, ["backlog", "待立项", "需求池"]) ? "backlog" : "todo";
   }
-  if (includesAny(name, ["review", "verify", "test", "验收", "评审", "测试"])) {
-    return "in_review";
-  }
+  if (includesAny(name, ["verify", "test", "qa", "验收", "测试"])) return "in_test";
+  if (includesAny(name, ["review", "评审"])) return "in_review";
   if (includesAny(name, ["block", "hold", "阻塞", "挂起"])) return "blocked";
   return "in_progress";
 }
