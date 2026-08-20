@@ -224,6 +224,12 @@ interface PendingRemoteThreadClaim {
 type ProjectAutomationStatus = "ACTIVE" | "PAUSED";
 type AutomationQuotaState = "available" | "blocked" | "unknown" | "unavailable";
 type AutomationIntervalMinutes = 5 | 10 | 15 | 30 | 60;
+type LinearSyncIntervalMinutes = 1 | 5 | 10 | 15 | 30;
+
+interface LinearSyncAutomationOptions {
+  enabled: boolean;
+  intervalMinutes: LinearSyncIntervalMinutes;
+}
 
 interface AutomationQuotaStatus {
   state: AutomationQuotaState;
@@ -320,6 +326,7 @@ const PROJECT_VIEW_KEY_PREFIX = "taskboard.project-view.v1.";
 const DEVICE_WORKSPACE_PATHS_KEY = "taskboard.deviceWorkspacePaths.v1";
 const PROJECT_CODEX_IDENTITIES_KEY = "taskboard.projectCodexIdentities.v1";
 const PROJECT_AUTOMATIONS_KEY = "taskboard.projectAutomations.v1";
+const LINEAR_SYNC_AUTOMATION_KEY = "taskboard.linearSyncAutomation.v1";
 const BOARD_CARD_DISPLAY_KEY = "taskboard.board-card-display.v1";
 const ISSUE_READ_KEY_PREFIX = "taskboard.issue-read.v1";
 const FIRST_USE_COMPLETE_KEY = "taskboard.first-use-complete.v1";
@@ -359,6 +366,18 @@ function readBoardCardDisplay(): BoardCardDisplay {
     };
   } catch {
     return { cover: true, body: false };
+  }
+}
+
+function readLinearSyncAutomation(): LinearSyncAutomationOptions {
+  try {
+    const value = JSON.parse(taskboardStorage.getItem(LINEAR_SYNC_AUTOMATION_KEY) ?? "{}");
+    const intervalMinutes = [1, 5, 10, 15, 30].includes(value.intervalMinutes)
+      ? value.intervalMinutes as LinearSyncIntervalMinutes
+      : 1;
+    return { enabled: value.enabled !== false, intervalMinutes };
+  } catch {
+    return { enabled: true, intervalMinutes: 1 };
   }
 }
 
@@ -798,6 +817,7 @@ export function App() {
   const [linearSaving, setLinearSaving] = useState(false);
   const [linearSyncing, setLinearSyncing] = useState(false);
   const [linearError, setLinearError] = useState<string | null>(null);
+  const [linearSyncAutomation, setLinearSyncAutomation] = useState(readLinearSyncAutomation);
   const [pendingProjectDelete, setPendingProjectDelete] = useState<ProjectChoice | null>(null);
   const [projectDeleteIssueCount, setProjectDeleteIssueCount] = useState<number | null>(null);
   const [deletingProjectId, setDeletingProjectId] = useState<string | null>(null);
@@ -1883,8 +1903,7 @@ export function App() {
 
   useEffect(() => {
     const externalSyncEnabled = isJiraProject
-      || isLinearProject
-      || (isAllProjects && (jiraConnection?.configured || linearConnection?.configured));
+      || (isAllProjects && jiraConnection?.configured);
     if (!externalSyncEnabled || !selectedProjectId) return;
     const timer = window.setInterval(() => {
       void refreshTasks(selectedProjectId, { quiet: true });
@@ -1893,11 +1912,45 @@ export function App() {
   }, [
     isAllProjects,
     isJiraProject,
-    isLinearProject,
     jiraConnection?.configured,
-    linearConnection?.configured,
     refreshTasks,
     selectedProjectId,
+  ]);
+
+  useEffect(() => {
+    if (!linearConnection?.configured || !linearSyncAutomation.enabled) return;
+    let disposed = false;
+    let syncing = false;
+    const sync = async () => {
+      if (syncing) return;
+      syncing = true;
+      try {
+        const connection = await syncLinearConnection();
+        if (disposed) return;
+        setLinearConnection(connection);
+        const projectId = selectedProjectIdRef.current;
+        await Promise.all([
+          projectId ? refreshTasks(projectId, { quiet: true }) : Promise.resolve(),
+          refreshProjectList(),
+        ]);
+      } catch (error) {
+        if (!disposed) setActionError(errorMessage(error));
+      } finally {
+        syncing = false;
+      }
+    };
+    void sync();
+    const timer = window.setInterval(sync, linearSyncAutomation.intervalMinutes * 60_000);
+    return () => {
+      disposed = true;
+      window.clearInterval(timer);
+    };
+  }, [
+    linearConnection?.configured,
+    linearSyncAutomation.enabled,
+    linearSyncAutomation.intervalMinutes,
+    refreshProjectList,
+    refreshTasks,
   ]);
 
   const refreshWorkflowOptions = useCallback(async (projectId: string, signal?: AbortSignal) => {
@@ -3296,6 +3349,11 @@ export function App() {
     }
   }
 
+  function updateLinearSyncAutomation(options: LinearSyncAutomationOptions) {
+    setLinearSyncAutomation(options);
+    taskboardStorage.setItem(LINEAR_SYNC_AUTOMATION_KEY, JSON.stringify(options));
+  }
+
   function openCreateProjectDialog() {
     setProjectMenuOpen(false);
     setProjectContextMenu(null);
@@ -3591,8 +3649,11 @@ export function App() {
                 pending={automationPending}
                 error={automationError}
                 unavailableReason={automationProjectContext.unavailableReason}
+                linearSync={isLinearProject ? linearSyncAutomation : undefined}
+                linearSyncPending={linearSyncing}
                 onOpen={() => void reconcileProjectAutomation()}
                 onChange={(options) => void saveProjectAutomation(options)}
+                onLinearSyncChange={isLinearProject ? updateLinearSyncAutomation : undefined}
               />
             )}
             {isJiraProject && (

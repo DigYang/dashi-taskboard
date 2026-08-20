@@ -15,6 +15,7 @@ import { useTaskboardI18n } from "../i18n";
 type AutomationStatus = "ACTIVE" | "PAUSED";
 type AutomationQuotaState = "available" | "blocked" | "unknown" | "unavailable";
 type IntervalMinutes = 5 | 10 | 15 | 30 | 60;
+type LinearSyncIntervalMinutes = 1 | 5 | 10 | 15 | 30;
 
 interface AutomationOptions {
   enabledByUser: boolean;
@@ -34,13 +35,21 @@ interface AutomationState extends AutomationOptions {
   };
 }
 
+interface LinearSyncOptions {
+  enabled: boolean;
+  intervalMinutes: LinearSyncIntervalMinutes;
+}
+
 interface ProjectAutomationMenuProps {
   automation?: Partial<AutomationState>;
   pending: boolean;
   error: string | null;
   unavailableReason: string | null;
+  linearSync?: LinearSyncOptions;
+  linearSyncPending: boolean;
   onOpen: () => void;
   onChange: (options: AutomationOptions) => void;
+  onLinearSyncChange?: (options: LinearSyncOptions) => void;
 }
 
 const DEFAULT_OPTIONS: AutomationOptions = {
@@ -65,15 +74,18 @@ export function ProjectAutomationMenu({
   pending,
   error,
   unavailableReason,
+  linearSync,
+  linearSyncPending,
   onOpen,
   onChange,
+  onLinearSyncChange,
 }: ProjectAutomationMenuProps) {
   const { locale, text } = useTaskboardI18n();
   const triggerRef = useRef<HTMLButtonElement>(null);
   const menuRef = useRef<HTMLDivElement>(null);
   const wasPendingRef = useRef(pending);
   const [open, setOpen] = useState(false);
-  const [pickerMenu, setPickerMenu] = useState<"interval" | "model" | "reasoning" | null>(null);
+  const [pickerMenu, setPickerMenu] = useState<"interval" | "model" | "reasoning" | "linearInterval" | null>(null);
   const [position, setPosition] = useState({ left: 0, top: 0, ready: false });
   const [draft, setDraft] = useState<AutomationOptions>(DEFAULT_OPTIONS);
   const status = automation?.status ?? "PAUSED";
@@ -90,6 +102,7 @@ export function ProjectAutomationMenu({
             ? text("运行中", "Running")
             : text("已暂停", "Paused");
   const disabled = pending || Boolean(unavailableReason);
+  const automationRunning = status === "ACTIVE" || linearSync?.enabled === true;
 
   useEffect(() => {
     if (!open) return;
@@ -285,6 +298,53 @@ export function ProjectAutomationMenu({
       </div>
       {unavailableReason && <p className="project-automation-note">{unavailableReason}</p>}
       {error && error !== unavailableReason && <p className="project-automation-error" role="alert">{error}</p>}
+      {linearSync && onLinearSyncChange && (
+        <div className="project-automation-section">
+          <div className="project-automation-menu-heading">
+            <strong>{text("Linear 自动同步", "Linear auto-sync")}</strong>
+            <span className={linearSync.enabled ? "is-active" : "is-paused"}>
+              {linearSync.enabled ? text("运行中", "Running") : text("已暂停", "Paused")}
+            </span>
+          </div>
+          <div className="project-automation-switch">
+            <span>{text("自动同步开关", "Auto-sync")}</span>
+            <button
+              type="button"
+              className={`board-setting-switch${linearSync.enabled ? " is-on" : ""}`}
+              role="switch"
+              aria-checked={linearSync.enabled}
+              disabled={linearSyncPending}
+              onClick={() => onLinearSyncChange({
+                ...linearSync,
+                enabled: !linearSync.enabled,
+              })}
+            >
+              <span aria-hidden="true" />
+            </button>
+          </div>
+          <div className="project-automation-field">
+            <span>{text("同步间隔", "Sync interval")}</span>
+            <TaskPropertyPicker
+              value={String(linearSync.intervalMinutes)}
+              options={[1, 5, 10, 15, 30].map((minutes) => ({
+                value: String(minutes),
+                label: text(`${minutes} 分钟`, `${minutes} min`),
+                icon: <LinearIcon name="recurrence" />,
+              }))}
+              open={pickerMenu === "linearInterval"}
+              disabled={linearSyncPending}
+              className="project-automation-picker"
+              triggerClassName="project-automation-picker-trigger"
+              ariaLabel={text("同步间隔", "Sync interval")}
+              onOpenChange={(open) => setPickerMenu(open ? "linearInterval" : null)}
+              onChange={(value) => onLinearSyncChange({
+                ...linearSync,
+                intervalMinutes: Number(value) as LinearSyncIntervalMinutes,
+              })}
+            />
+          </div>
+        </div>
+      )}
     </div>,
     document.body,
   ) : null;
@@ -294,15 +354,15 @@ export function ProjectAutomationMenu({
       <button
         ref={triggerRef}
         type="button"
-        className={`project-automation-trigger no-drag ${status === "ACTIVE" ? "is-active" : "is-paused"}`}
-        aria-label={status === "ACTIVE"
-          ? text("自动认领中", "Auto-claiming")
+        className={`project-automation-trigger no-drag ${automationRunning ? "is-active" : "is-paused"}`}
+        aria-label={automationRunning
+          ? text("自动化运行中", "Automation running")
           : text("自动化", "Automation")}
         aria-busy={pending}
         aria-haspopup="dialog"
         aria-expanded={open}
-        title={status === "ACTIVE"
-          ? text("自动认领中", "Auto-claiming")
+        title={automationRunning
+          ? text("自动化运行中", "Automation running")
           : text("自动化", "Automation")}
         onClick={() => {
           if (!open) {
@@ -312,9 +372,9 @@ export function ProjectAutomationMenu({
           setOpen((current) => !current);
         }}
       >
-        <TaskboardIcon name={status === "ACTIVE" ? "automationPause" : "automationPlay"} />
-        <span>{status === "ACTIVE"
-          ? text("自动认领中", "Auto-claiming")
+        <TaskboardIcon name={automationRunning ? "automationPause" : "automationPlay"} />
+        <span>{automationRunning
+          ? text("自动化运行中", "Automation running")
           : text("自动化", "Automation")}</span>
       </button>
       {menu}
