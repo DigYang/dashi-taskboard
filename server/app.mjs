@@ -12,6 +12,7 @@ import { promisify } from "node:util";
 import {
   DEFAULT_PROJECT_ID,
   JIRA_PROJECT_ID,
+  LINEAR_PROJECT_ID,
   TASK_STATUSES,
   isTaskPriority,
   isTaskStatus,
@@ -32,6 +33,8 @@ import {
 import { ApiError, TaskboardDatabase } from "./database.mjs";
 import { createJiraConfigStore } from "./jira-config.mjs";
 import { createJiraIntegration } from "./jira-integration.mjs";
+import { createLinearConfigStore } from "./linear-config.mjs";
+import { createLinearIntegration } from "./linear-integration.mjs";
 import { ProjectSummaryService } from "./project-summary.mjs";
 
 const PROJECT_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -1726,6 +1729,7 @@ export function resolveServerOptions(options = {}) {
     attachmentsDirectory: options.attachmentsDirectory ?? path.join(dataDirectory, "attachments"),
     cloudConfigPath: options.cloudConfigPath ?? path.join(dataDirectory, "cloud-companion.json"),
     jiraConfigPath: options.jiraConfigPath ?? path.join(dataDirectory, "jira-connection.json"),
+    linearConfigPath: options.linearConfigPath ?? path.join(dataDirectory, "linear-connection.json"),
     clientStoragePath: options.clientStoragePath ?? path.join(dataDirectory, "client-storage.json"),
     staticDirectory: options.staticDirectory ?? path.join(PROJECT_ROOT, "dist", "web"),
     skillPath: options.skillPath ?? path.join(PROJECT_ROOT, "skills", "manage-taskboard", "SKILL.md"),
@@ -1806,6 +1810,14 @@ export function createTaskboardServer(options = {}) {
     configStore: jiraConfig,
     database,
     fetch: options.jiraFetch ?? globalThis.fetch,
+  });
+  const linearConfig = options.linearConfigStore ?? createLinearConfigStore({
+    configPath: resolved.linearConfigPath,
+  });
+  const linear = createLinearIntegration({
+    configStore: linearConfig,
+    database,
+    fetch: options.linearFetch ?? globalThis.fetch,
   });
   let hostRuntime = null;
   function currentHostThreadBinding(threadId) {
@@ -2353,6 +2365,59 @@ export function createTaskboardServer(options = {}) {
         return sendJson(response, 200, { connection });
       }
 
+      if (pathname === "/api/local/linear-connection") {
+        if ([...url.searchParams.keys()].length > 0) {
+          throw new ApiError(400, "UNKNOWN_QUERY_PARAMETER", "Linear 连接接口不接受查询参数");
+        }
+        if (request.method === "GET") {
+          return sendJson(response, 200, { connection: await linear.status() });
+        }
+        if (request.method === "PUT") {
+          const activeCloudConfig = await cloudConfig.read();
+          if (activeCloudConfig.remoteUrl) {
+            throw new ApiError(
+              409,
+              "LINEAR_LOCAL_MODE_REQUIRED",
+              "Linear 连接当前仅支持本地数据模式，请先退出云端协作模式",
+            );
+          }
+          const body = await readJson(request);
+          assertPlainObject(body);
+          assertAllowedKeys(body, new Set(["apiKey", "teams", "projects"]));
+          const apiKey = body.apiKey ?? "";
+          if (typeof apiKey !== "string") {
+            throw new ApiError(400, "INVALID_FIELD", "'apiKey' must be a string");
+          }
+          if (apiKey.length > 4096) {
+            throw new ApiError(400, "INVALID_FIELD", "'apiKey' cannot exceed 4096 characters");
+          }
+          try {
+            const connection = await linear.configure({
+              apiKey,
+              teams: body.teams,
+              projects: body.projects,
+            });
+            events.emit("project.labels.updated", { project: database.getProject(LINEAR_PROJECT_ID) });
+            return sendJson(response, 200, { connection });
+          } catch (error) {
+            if (error instanceof ApiError) throw error;
+            throw new ApiError(400, error.code ?? "INVALID_LINEAR_CONFIG", error.message);
+          }
+        }
+        return methodNotAllowed(response, ["GET", "PUT"]);
+      }
+
+      if (pathname === "/api/local/linear-connection/sync") {
+        if (request.method !== "POST") return methodNotAllowed(response, ["POST"]);
+        if ([...url.searchParams.keys()].length > 0) {
+          throw new ApiError(400, "UNKNOWN_QUERY_PARAMETER", "Linear 同步接口不接受查询参数");
+        }
+        await assertEmptyRequestBody(request, "POST /api/local/linear-connection/sync");
+        const connection = await linear.sync({ force: true });
+        events.emit("project.labels.updated", { project: database.getProject(LINEAR_PROJECT_ID) });
+        return sendJson(response, 200, { connection });
+      }
+
       const projectMappingRoute = pathname.match(/^\/api\/local\/project-mappings\/([^/]+)$/);
       if (projectMappingRoute) {
         if (request.method !== "PUT") return methodNotAllowed(response, ["PUT"]);
@@ -2650,6 +2715,13 @@ export function createTaskboardServer(options = {}) {
             "Jira 标签目录由同步管理，不能在 Taskboard 中删除",
           );
         }
+        if (request.method === "DELETE" && projectId === LINEAR_PROJECT_ID) {
+          throw new ApiError(
+            409,
+            "LINEAR_LABEL_CATALOG_DELETE_UNAVAILABLE",
+            "Linear 标签目录由同步管理，不能在 Taskboard 中删除",
+          );
+        }
         const label = parseProjectLabel(await readJson(request));
         const project = request.method === "POST"
           ? database.addProjectLabel(projectId, label)
@@ -2744,6 +2816,7 @@ export function createTaskboardServer(options = {}) {
         if (request.method === "GET") {
           const filters = parseTaskFilters(url.searchParams);
           if (!filters.projectId || filters.projectId === JIRA_PROJECT_ID) await jira.sync();
+          if (!filters.projectId || filters.projectId === LINEAR_PROJECT_ID) await linear.sync();
           return sendJson(response, 200, { tasks: database.listTasks(filters) });
         }
         if (request.method === "POST") {
@@ -2755,6 +2828,13 @@ export function createTaskboardServer(options = {}) {
               409,
               "JIRA_CREATE_UNAVAILABLE",
               "请在 Jira 中新建议题，Taskboard 当前只同步已分配给你的任务",
+            );
+          }
+          if (input.projectId === LINEAR_PROJECT_ID) {
+            throw new ApiError(
+              409,
+              "LINEAR_CREATE_UNAVAILABLE",
+              "请在 Linear 中新建议题，Taskboard 当前只同步已分配给你的任务",
             );
           }
           const task = database.createTask({
@@ -3106,11 +3186,19 @@ export function createTaskboardServer(options = {}) {
           const current = database.getTask(id);
           if (!current) throw new ApiError(404, "TASK_NOT_FOUND", `Task '${id}' does not exist`);
           let jiraChanged = false;
+          let linearChanged = false;
           if (current.source !== "jira" && changes.projectId === JIRA_PROJECT_ID) {
             throw new ApiError(
               409,
               "JIRA_PROJECT_MOVE_UNAVAILABLE",
               "本地任务不能移入 Jira 同步项目",
+            );
+          }
+          if (current.source !== "linear" && changes.projectId === LINEAR_PROJECT_ID) {
+            throw new ApiError(
+              409,
+              "LINEAR_PROJECT_MOVE_UNAVAILABLE",
+              "本地任务不能移入 Linear 同步项目",
             );
           }
           if (current.source === "jira") {
@@ -3138,6 +3226,27 @@ export function createTaskboardServer(options = {}) {
             }
             jiraChanged = await jira.updateTask(current, changes);
           }
+          if (current.source === "linear") {
+            if (current.version !== version) {
+              throw new ApiError(409, "VERSION_CONFLICT", "Task changed since it was last read", {
+                expectedVersion: version,
+                actualVersion: current.version,
+              });
+            }
+            if (current.archivedAt !== null) {
+              throw new ApiError(409, "TASK_ARCHIVED", "Archived tasks cannot be updated");
+            }
+            if (Object.hasOwn(changes, "projectId")) {
+              throw new ApiError(409, "LINEAR_PROJECT_MOVE_UNAVAILABLE", "Linear 任务不能移到其他项目");
+            }
+            if (assigneeTarget !== undefined) {
+              throw new ApiError(409, "LINEAR_ASSIGNEE_UNAVAILABLE", "请在 Linear 中修改经办人");
+            }
+            if (Object.hasOwn(changes, "recurrence") && changes.recurrence !== null) {
+              throw new ApiError(409, "LINEAR_RECURRENCE_UNAVAILABLE", "Linear 同步任务不支持 Taskboard 重复规则");
+            }
+            linearChanged = await linear.updateTask(current, changes);
+          }
           if (assigneeTarget !== undefined) {
             changes.assignee = resolveAssignee(assigneeTarget, actor);
           }
@@ -3156,7 +3265,30 @@ export function createTaskboardServer(options = {}) {
                 );
               }
             }
+            if (linearChanged) {
+              try {
+                await linear.reconcile();
+              } catch {
+                throw new ApiError(
+                  502,
+                  "LINEAR_RECONCILE_FAILED",
+                  "Linear 已更新，但 Taskboard 重新同步失败，请手动同步",
+                );
+              }
+            }
             throw error;
+          }
+          if (linearChanged) {
+            try {
+              await linear.reconcile();
+              task = database.getTask(id);
+            } catch {
+              throw new ApiError(
+                502,
+                "LINEAR_RECONCILE_FAILED",
+                "Linear 已更新，但 Taskboard 重新同步失败，请手动同步",
+              );
+            }
           }
           events.emit("task.updated", { task });
           return sendJson(response, 200, { task });
@@ -3165,6 +3297,9 @@ export function createTaskboardServer(options = {}) {
           const current = database.getTask(id);
           if (current?.source === "jira") {
             throw new ApiError(409, "JIRA_DELETE_UNAVAILABLE", "Jira 任务不能从 Taskboard 永久删除");
+          }
+          if (current?.source === "linear") {
+            throw new ApiError(409, "LINEAR_DELETE_UNAVAILABLE", "Linear 任务不能从 Taskboard 永久删除");
           }
           const { version } = parseArchive(await readJson(request));
           const deleted = database.deleteArchivedTask(id, version);
@@ -3194,7 +3329,20 @@ export function createTaskboardServer(options = {}) {
             }
             await jira.moveTask(current, move.status);
           }
-          const task = database.moveTask(
+          let linearChanged = false;
+          if (current.source === "linear") {
+            if (current.version !== move.version) {
+              throw new ApiError(409, "VERSION_CONFLICT", "Task changed since it was last read", {
+                expectedVersion: move.version,
+                actualVersion: current.version,
+              });
+            }
+            if (current.archivedAt !== null) {
+              throw new ApiError(409, "TASK_ARCHIVED", "Archived tasks cannot be moved");
+            }
+            linearChanged = await linear.moveTask(current, move.status);
+          }
+          let task = database.moveTask(
             id,
             move.version,
             move.status,
@@ -3203,6 +3351,18 @@ export function createTaskboardServer(options = {}) {
             move.threadBinding,
             actorFromRequest(request),
           );
+          if (linearChanged) {
+            try {
+              await linear.reconcile();
+              task = database.getTask(id);
+            } catch {
+              throw new ApiError(
+                502,
+                "LINEAR_RECONCILE_FAILED",
+                "Linear 已更新，但 Taskboard 重新同步失败，请手动同步",
+              );
+            }
+          }
           events.emit("task.moved", { task });
           return sendJson(response, 200, { task });
         }
@@ -3210,6 +3370,9 @@ export function createTaskboardServer(options = {}) {
           const current = database.getTask(id);
           if (current?.source === "jira") {
             throw new ApiError(409, "JIRA_ARCHIVE_UNAVAILABLE", "Jira 任务由同步范围自动管理，不能手动归档");
+          }
+          if (current?.source === "linear") {
+            throw new ApiError(409, "LINEAR_ARCHIVE_UNAVAILABLE", "Linear 任务由同步范围自动管理，不能手动归档");
           }
           const { version, threadId, threadBinding } = resolveInputThreadBinding(
             parseArchive(await readJson(request)),
@@ -3228,6 +3391,9 @@ export function createTaskboardServer(options = {}) {
           const current = database.getTask(id);
           if (current?.source === "jira") {
             throw new ApiError(409, "JIRA_RESTORE_UNAVAILABLE", "Jira 任务由同步范围自动管理，不能手动恢复");
+          }
+          if (current?.source === "linear") {
+            throw new ApiError(409, "LINEAR_RESTORE_UNAVAILABLE", "Linear 任务由同步范围自动管理，不能手动恢复");
           }
           const { version, threadId, threadBinding } = resolveInputThreadBinding(
             parseArchive(await readJson(request)),

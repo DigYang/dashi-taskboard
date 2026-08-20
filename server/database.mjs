@@ -3,7 +3,7 @@ import { mkdirSync } from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 
-import { DEFAULT_LABEL_NAMES, JIRA_PROJECT_ID } from "../shared/domain.mjs";
+import { DEFAULT_LABEL_NAMES, JIRA_PROJECT_ID, LINEAR_PROJECT_ID } from "../shared/domain.mjs";
 
 const DEFAULT_PROJECT_LABELS_JSON = JSON.stringify(DEFAULT_LABEL_NAMES);
 
@@ -249,7 +249,11 @@ function taskFromRow(row) {
     recurrence: row.recurrence_interval && row.recurrence_unit
       ? { interval: row.recurrence_interval, unit: row.recurrence_unit }
       : null,
-    source: row.external_source === "jira" ? "jira" : "local",
+    source: row.external_source === "jira"
+      ? "jira"
+      : row.external_source === "linear"
+        ? "linear"
+        : "local",
     externalOrigin: row.external_origin ?? null,
     externalKey: row.external_key ?? null,
     externalUrl: row.external_url ?? null,
@@ -316,7 +320,11 @@ function projectFromRow(row) {
     id: row.id,
     name: row.name,
     workspacePath: row.workspace_path,
-    source: row.id === JIRA_PROJECT_ID ? "jira" : "local",
+    source: row.id === JIRA_PROJECT_ID
+      ? "jira"
+      : row.id === LINEAR_PROJECT_ID
+        ? "linear"
+        : "local",
     labels: JSON.parse(row.labels),
     issueCount: Number(row.issue_count ?? 0),
     createdAt: row.created_at,
@@ -1192,6 +1200,169 @@ export class TaskboardDatabase {
       }
       this.database.prepare("UPDATE projects SET updated_at = ? WHERE id = ?")
         .run(timestamp, JIRA_PROJECT_ID);
+      this.database.exec("COMMIT");
+    } catch (error) {
+      this.database.exec("ROLLBACK");
+      throw error;
+    }
+  }
+
+  syncLinearTasks(issues, { archiveMissing = false, projectName, projectLabels = [] } = {}) {
+    const timestamp = now();
+    const seenTaskIds = new Set();
+    const labels = [...new Set([
+      ...projectLabels,
+      ...issues.flatMap((issue) => issue.labels),
+    ].flatMap((label) => {
+      if (typeof label !== "string") return [];
+      const normalized = label.trim().slice(0, 64);
+      return normalized ? [normalized] : [];
+    }))];
+    this.database.exec("BEGIN IMMEDIATE");
+    try {
+      this.database.prepare(`
+        INSERT INTO projects (id, name, workspace_path, labels, next_task_number, created_at, updated_at)
+        VALUES (?, ?, NULL, ?, 1, ?, ?)
+        ON CONFLICT(id) DO UPDATE SET
+          name = excluded.name,
+          labels = excluded.labels,
+          updated_at = excluded.updated_at
+      `).run(LINEAR_PROJECT_ID, projectName, JSON.stringify(labels), timestamp, timestamp);
+      const findExisting = this.database.prepare(`
+        SELECT * FROM tasks
+        WHERE external_source = 'linear' AND external_origin = ? AND external_id = ?
+      `);
+      const insertTask = this.database.prepare(`
+        INSERT INTO tasks (
+          id, identifier, project_id, title, description, status, priority, labels,
+          sort_order, thread_id, thread_codex_project_id, thread_codex_project_kind,
+          thread_codex_host_id, thread_workspace_path,
+          creator_type, creator_id, creator_name, creator_avatar_url,
+          assignee_type, assignee_id, assignee_name, assignee_avatar_url,
+          workflow_id, git_branch, worktree_path, worktree_branch,
+          start_date, due_date, recurrence_interval, recurrence_unit,
+          external_source, external_origin, external_id, external_key, external_url,
+          archived_at, version, created_at, updated_at
+        ) VALUES (
+          ?, ?, ?, ?, ?, ?, ?, ?,
+          ?, NULL, NULL, NULL, NULL, NULL,
+          ?, ?, ?, ?,
+          ?, ?, ?, ?,
+          NULL, NULL, NULL, NULL,
+          NULL, ?, NULL, NULL,
+          'linear', ?, ?, ?, ?,
+          NULL, 1, ?, ?
+        )
+      `);
+      const updateTask = this.database.prepare(`
+        UPDATE tasks SET
+          identifier = ?, title = ?, description = ?, status = ?, priority = ?, labels = ?,
+          sort_order = ?, creator_type = ?, creator_id = ?, creator_name = ?, creator_avatar_url = ?,
+          assignee_type = ?, assignee_id = ?, assignee_name = ?, assignee_avatar_url = ?,
+          due_date = ?, external_origin = ?, external_id = ?, external_key = ?, external_url = ?,
+          archived_at = NULL,
+          version = version + 1, updated_at = ?
+        WHERE id = ?
+      `);
+
+      for (const issue of issues) {
+        const existing = findExisting.get(issue.externalOrigin, issue.externalId);
+        seenTaskIds.add(existing?.id ?? issue.id);
+        const taskLabels = JSON.stringify(issue.labels);
+        if (!existing) {
+          insertTask.run(
+            issue.id,
+            issue.identifier,
+            LINEAR_PROJECT_ID,
+            issue.title,
+            issue.description,
+            issue.status,
+            issue.priority,
+            taskLabels,
+            issue.sortOrder,
+            issue.creator.type,
+            issue.creator.id,
+            issue.creator.name,
+            issue.creator.avatarUrl,
+            issue.assignee.type,
+            issue.assignee.id,
+            issue.assignee.name,
+            issue.assignee.avatarUrl,
+            issue.dueDate,
+            issue.externalOrigin,
+            issue.externalId,
+            issue.externalKey,
+            issue.externalUrl,
+            issue.createdAt,
+            issue.updatedAt,
+          );
+          continue;
+        }
+
+        const changed = existing.identifier !== issue.identifier
+          || existing.title !== issue.title
+          || existing.description !== issue.description
+          || existing.status !== issue.status
+          || existing.priority !== issue.priority
+          || existing.labels !== taskLabels
+          || existing.sort_order !== issue.sortOrder
+          || existing.creator_type !== issue.creator.type
+          || existing.creator_id !== issue.creator.id
+          || existing.creator_name !== issue.creator.name
+          || existing.creator_avatar_url !== issue.creator.avatarUrl
+          || existing.assignee_type !== issue.assignee.type
+          || existing.assignee_id !== issue.assignee.id
+          || existing.assignee_name !== issue.assignee.name
+          || existing.assignee_avatar_url !== issue.assignee.avatarUrl
+          || existing.due_date !== issue.dueDate
+          || existing.external_origin !== issue.externalOrigin
+          || existing.external_id !== issue.externalId
+          || existing.external_key !== issue.externalKey
+          || existing.external_url !== issue.externalUrl
+          || existing.archived_at !== null;
+        if (!changed) continue;
+        updateTask.run(
+          issue.identifier,
+          issue.title,
+          issue.description,
+          issue.status,
+          issue.priority,
+          taskLabels,
+          issue.sortOrder,
+          issue.creator.type,
+          issue.creator.id,
+          issue.creator.name,
+          issue.creator.avatarUrl,
+          issue.assignee.type,
+          issue.assignee.id,
+          issue.assignee.name,
+          issue.assignee.avatarUrl,
+          issue.dueDate,
+          issue.externalOrigin,
+          issue.externalId,
+          issue.externalKey,
+          issue.externalUrl,
+          issue.updatedAt,
+          existing.id,
+        );
+      }
+
+      if (archiveMissing) {
+        const existingTasks = this.database.prepare(`
+          SELECT id FROM tasks
+          WHERE project_id = ? AND external_source = 'linear' AND archived_at IS NULL
+        `).all(LINEAR_PROJECT_ID);
+        const archiveTask = this.database.prepare(`
+          UPDATE tasks
+          SET archived_at = ?, version = version + 1, updated_at = ?
+          WHERE id = ?
+        `);
+        for (const task of existingTasks) {
+          if (!seenTaskIds.has(task.id)) archiveTask.run(timestamp, timestamp, task.id);
+        }
+      }
+      this.database.prepare("UPDATE projects SET updated_at = ? WHERE id = ?")
+        .run(timestamp, LINEAR_PROJECT_ID);
       this.database.exec("COMMIT");
     } catch (error) {
       this.database.exec("ROLLBACK");
