@@ -2434,6 +2434,24 @@ export function createTaskboardServer(options = {}) {
         return sendJson(response, 200, { connection });
       }
 
+      const linearIssueRoute = pathname.match(/^\/api\/local\/linear-issues\/([^/]+)$/);
+      if (linearIssueRoute) {
+        if (request.method !== "GET") return methodNotAllowed(response, ["GET"]);
+        if ([...url.searchParams.keys()].length > 0) {
+          throw new ApiError(400, "UNKNOWN_QUERY_PARAMETER", "Linear 议题详情接口不接受查询参数");
+        }
+        let issueId;
+        try {
+          issueId = decodeURIComponent(linearIssueRoute[1]);
+        } catch {
+          throw new ApiError(400, "INVALID_PATH", "Linear issue id contains invalid encoding");
+        }
+        if (issueId.length === 0 || issueId.length > 256) {
+          throw new ApiError(400, "INVALID_PATH", "Linear issue id is invalid");
+        }
+        return sendJson(response, 200, { task: await linear.getIssueDetail(issueId) });
+      }
+
       const projectMappingRoute = pathname.match(/^\/api\/local\/project-mappings\/([^/]+)$/);
       if (projectMappingRoute) {
         if (request.method !== "PUT") return methodNotAllowed(response, ["PUT"]);

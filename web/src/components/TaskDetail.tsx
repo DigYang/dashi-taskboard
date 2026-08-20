@@ -515,6 +515,7 @@ export function TaskDetail({
   const commentInlineImages = inlineMediaImages(commentSegments);
   const editingDraft = serializeInlineMedia(editingSegments);
   const displayIdentifier = currentTask.externalKey ?? currentTask.identifier;
+  const readOnly = currentTask.readOnly === true;
   const editingInlineImages = inlineMediaImages(editingSegments);
 
   useEffect(() => {
@@ -550,6 +551,13 @@ export function TaskDetail({
   }, [editingId]);
 
   useEffect(() => {
+    if (task.readOnly) {
+      setComments([]);
+      setTaskActivities([]);
+      setCommentsError(null);
+      setCommentsLoading(false);
+      return;
+    }
     const controller = new AbortController();
     setCommentsError(null);
     void Promise.all([
@@ -571,6 +579,11 @@ export function TaskDetail({
   }, [commentsRevision, task.activityKey, task.id]);
 
   useEffect(() => {
+    if (task.readOnly) {
+      setAttachments([]);
+      setAttachmentsError(null);
+      return;
+    }
     const controller = new AbortController();
     setAttachmentsError(null);
     void listAttachments(task.id, controller.signal).then(
@@ -1003,17 +1016,21 @@ export function TaskDetail({
                   rows={1}
                   value={title}
                   aria-label={text("议题标题", "Issue title")}
+                  readOnly={readOnly}
                   disabled={savingProperty === "title"}
                   onChange={(event) => {
                     setTitle(event.target.value.replace(/\n/g, ""));
                     resizeTextarea(event.currentTarget);
                   }}
                   onKeyDown={handleTitleKeyDown}
-                  onBlur={() => void saveTitle()}
+                  onBlur={() => {
+                    if (!readOnly) void saveTitle();
+                  }}
                 />
                 <IssueParentLink
                   task={currentTask}
                   tasks={tasks}
+                  readOnly={readOnly}
                   onOpenTask={onOpenTask}
                   onAddRelation={(anchor, type, relatedTaskId) => applyRelationMutation(
                     () => onAddRelation(anchor, type, relatedTaskId),
@@ -1022,7 +1039,7 @@ export function TaskDetail({
                     () => onRemoveRelation(anchor, type, relatedTaskId),
                   )}
                 />
-                {editingDescription ? (
+                {editingDescription && !readOnly ? (
                   <div
                     className="issue-description-composer"
                     onBlur={(event) => {
@@ -1060,15 +1077,17 @@ export function TaskDetail({
                 ) : (
                   <div
                     className={`issue-description-read${description ? "" : " empty"}`}
-                    role="button"
-                    tabIndex={0}
-                    aria-label={text("编辑议题描述", "Edit issue description")}
+                    role={readOnly ? undefined : "button"}
+                    tabIndex={readOnly ? undefined : 0}
+                    aria-label={readOnly ? undefined : text("编辑议题描述", "Edit issue description")}
                     onClick={() => {
+                      if (readOnly) return;
                       if (window.getSelection()?.isCollapsed === false) return;
                       setDescriptionSegments(createInlineMediaSegments(description, referenceTasks));
                       setEditingDescription(true);
                     }}
                     onKeyDown={(event) => {
+                      if (readOnly) return;
                       if (event.key === "Enter" || event.key === " ") {
                         event.preventDefault();
                         setDescriptionSegments(createInlineMediaSegments(description, referenceTasks));
@@ -1106,7 +1125,7 @@ export function TaskDetail({
                     <span>{visibleTaskAttachments.length}</span>
                   </div>
                 )}
-                <button
+                {!readOnly && <button
                   className="attachment-add-button"
                   type="button"
                   disabled={uploadingAttachments}
@@ -1116,8 +1135,8 @@ export function TaskDetail({
                   {uploadingAttachments
                     ? text("上传中…", "Uploading…")
                     : text("添加附件", "Add attachment")}
-                </button>
-                <input
+                </button>}
+                {!readOnly && <input
                   ref={attachmentInputRef}
                   type="file"
                   multiple
@@ -1125,7 +1144,7 @@ export function TaskDetail({
                   onChange={(event) => {
                     if (event.currentTarget.files) void uploadFiles(event.currentTarget.files);
                   }}
-                />
+                />}
               </div>
               {visibleTaskAttachments.length > 0 && (
                 <section className="issue-attachments" aria-labelledby="attachments-heading">
@@ -1183,6 +1202,7 @@ export function TaskDetail({
             <IssueSubIssues
               task={currentTask}
               tasks={tasks}
+              readOnly={readOnly}
               onOpenTask={onOpenTask}
               onAddRelation={(anchor, type, relatedTaskId) => applyRelationMutation(
                 () => onAddRelation(anchor, type, relatedTaskId),
@@ -1494,7 +1514,7 @@ export function TaskDetail({
                 </div>
               )}
 
-              <form className="comment-composer" onSubmit={(event) => { event.preventDefault(); void submitComment(); }}>
+              {!readOnly && <form className="comment-composer" onSubmit={(event) => { event.preventDefault(); void submitComment(); }}>
                 <div className="composer-author">
                   <ActorAvatar
                     className="comment-avatar"
@@ -1576,13 +1596,13 @@ export function TaskDetail({
                     </button>
                   </div>
                 </footer>
-              </form>
+              </form>}
             </section>
           </div>
 
           <aside className="issue-properties" aria-label={text("议题属性", "Issue properties")}>
             <div className="detail-primary-actions">
-              <button
+              {!readOnly && <button
                 className="detail-open-thread-action"
                 type="button"
                 disabled={openingThread}
@@ -1592,7 +1612,7 @@ export function TaskDetail({
                 <span>{openingThread
                   ? text("正在打开…", "Opening…")
                   : text("在新对话打开", "Open in new conversation")}</span>
-              </button>
+              </button>}
               {currentTask.externalUrl && (
                 <a
                   className="detail-copy-action detail-external-action"
@@ -1652,7 +1672,7 @@ export function TaskDetail({
                   className: `status-icon-${STATUS_DETAILS[status].tone}`,
                 }))}
                 open={propertyMenu === "status"}
-                disabled={savingProperty === "status"}
+                disabled={readOnly || savingProperty === "status"}
                 className="detail-property-picker"
                 triggerClassName="detail-property-trigger"
                 ariaLabel={text("状态", "Status")}
@@ -1671,7 +1691,7 @@ export function TaskDetail({
                   className: `priority-${priority}`,
                 }))}
                 open={propertyMenu === "priority"}
-                disabled={savingProperty === "priority"}
+                disabled={readOnly || savingProperty === "priority"}
                 className="detail-property-picker"
                 triggerClassName="detail-property-trigger"
                 ariaLabel={text("优先级", "Priority")}
@@ -1693,7 +1713,7 @@ export function TaskDetail({
                     })),
                   ]}
                   open={propertyMenu === "estimate"}
-                  disabled={savingProperty === "estimate"}
+                  disabled={readOnly || savingProperty === "estimate"}
                   className="detail-property-picker"
                   triggerClassName="detail-property-trigger"
                   ariaLabel={text("点数", "Point")}
@@ -1716,7 +1736,7 @@ export function TaskDetail({
                   icon: <ActorAvatar actor={actor} className="task-property-assignee-avatar" />,
                 }))}
                 open={propertyMenu === "assignee"}
-                disabled={currentTask.source === "jira" || savingProperty === "assignee"}
+                disabled={readOnly || currentTask.source === "jira" || savingProperty === "assignee"}
                 className="detail-property-picker"
                 triggerClassName="detail-property-trigger"
                 ariaLabel={text("负责人", "Assignee")}
@@ -1744,7 +1764,7 @@ export function TaskDetail({
                 availableLabels={availableLabels}
                 selectedLabels={currentTask.labels}
                 open={propertyMenu === "labels"}
-                disabled={savingProperty === "labels"}
+                disabled={readOnly || savingProperty === "labels"}
                 className="detail-label-picker"
                 triggerClassName="detail-label-trigger"
                 showSelectedAsChips
@@ -1774,7 +1794,7 @@ export function TaskDetail({
                   })),
                 ]}
                 open={propertyMenu === "development"}
-                disabled={developmentScanLoading || savingProperty === "developmentContext"}
+                disabled={readOnly || developmentScanLoading || savingProperty === "developmentContext"}
                 className="detail-property-picker"
                 triggerClassName="detail-property-trigger"
                 ariaLabel={text("开发上下文", "Development context")}
@@ -1800,7 +1820,7 @@ export function TaskDetail({
               <input
                 type="date"
                 value={currentTask.startDate ?? ""}
-                disabled={savingProperty === "startDate"}
+                disabled={readOnly || savingProperty === "startDate"}
                 onChange={(event) => void saveTask({
                   startDate: event.target.value || null,
                 }, "startDate")}
@@ -1821,7 +1841,7 @@ export function TaskDetail({
               <input
                 type="date"
                 value={currentTask.dueDate ?? ""}
-                disabled={savingProperty === "dueDate"}
+                disabled={readOnly || savingProperty === "dueDate"}
                 onChange={(event) => void saveTask({
                   dueDate: event.target.value || null,
                   ...(event.target.value ? {} : { recurrence: null }),
@@ -1840,7 +1860,7 @@ export function TaskDetail({
                   { value: "year", label: text("每年", "Yearly"), icon: <LinearIcon name="recurrence" /> },
                 ]}
                 open={propertyMenu === "recurrence"}
-                disabled={savingProperty === "recurrence"}
+                disabled={readOnly || savingProperty === "recurrence"}
                 className="detail-property-picker"
                 triggerClassName="detail-property-trigger"
                 ariaLabel={text("重复", "Recurrence")}
@@ -1863,6 +1883,7 @@ export function TaskDetail({
             <IssueRelationSidebar
               task={currentTask}
               tasks={tasks}
+              readOnly={readOnly}
               onOpenTask={onOpenTask}
               onAddRelation={(anchor, type, relatedTaskId) => applyRelationMutation(
                 () => onAddRelation(anchor, type, relatedTaskId),

@@ -442,6 +442,7 @@ export interface Task {
   dueDate: string | null;
   recurrence: Recurrence | null;
   source: "local" | "jira" | "linear";
+  readOnly?: boolean;
   externalOrigin?: string | null;
   externalId?: string | null;
   externalKey?: string | null;

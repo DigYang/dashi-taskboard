@@ -37,6 +37,7 @@ import {
   getHostRuntime,
   getJiraConnection,
   getLinearConnection,
+  getLinearIssue,
   getTask,
   getTaskboardRevision,
   getWorkflowWorkspace,
@@ -132,6 +133,7 @@ import {
   type LinearConnection,
   type Project,
   type Task,
+  type TaskRelationSummary,
   type TaskboardMetadata,
   type TaskDraft,
   type TaskStatus,
@@ -322,6 +324,7 @@ const DEFAULT_USER_ACTOR: ActorIdentity = {
 };
 
 const GLOBAL_PROJECT_ID = "local";
+const LINEAR_PROJECT_ID = "linear-my-issues";
 const ALL_PROJECTS_ID = "__all_projects__";
 const RECENT_PROJECT_IDS_KEY = "taskboard.recentProjectIds.v1";
 const PROJECT_VIEW_KEY_PREFIX = "taskboard.project-view.v1.";
@@ -808,6 +811,7 @@ export function App() {
   const [detailTaskIdentifier, setDetailTaskIdentifier] = useState<string | null>(
     () => readIssueIdentifier(window.location.search),
   );
+  const [externalDetailTask, setExternalDetailTask] = useState<Task | null>(null);
   const [commentsRevision, setCommentsRevision] = useState(0);
   const [attachmentsRevision, setAttachmentsRevision] = useState(0);
   const [workflowRevision, setWorkflowRevision] = useState(0);
@@ -1084,9 +1088,14 @@ export function App() {
       skillPath: manageTaskboardSkillPath,
     };
   }, [automationProjectContext, hostContext, manageTaskboardSkillPath, selectedProject]);
-  const referenceTasks = useMemo(() => [...tasks, ...archivedTasks], [archivedTasks, tasks]);
+  const referenceTasks = useMemo(
+    () => [...tasks, ...archivedTasks, ...(externalDetailTask ? [externalDetailTask] : [])],
+    [archivedTasks, externalDetailTask, tasks],
+  );
   const detailTask = detailTaskIdentifier
-    ? referenceTasks.find((task) => task.identifier === detailTaskIdentifier) ?? null
+    ? referenceTasks.find(
+      (task) => task.identifier.toLowerCase() === detailTaskIdentifier.toLowerCase(),
+    ) ?? null
     : null;
   const detailTaskId = detailTask?.id ?? null;
   const contextMenuTask = contextMenu
@@ -1453,7 +1462,7 @@ export function App() {
     drainQueuedAutomationSaves,
   ]);
 
-  function openTaskDetail(task: Pick<Task, "identifier" | "projectId">) {
+  function showTaskDetail(task: Pick<Task, "identifier" | "projectId">) {
     const fullTask = tasksRef.current.find((candidate) => candidate.identifier === task.identifier);
     if (fullTask) markTaskRead(fullTask);
     const currentIssue = readIssueIdentifier(window.location.search);
@@ -1491,10 +1500,27 @@ export function App() {
     window.history.pushState(window.history.state, "", detailUrl);
   }
 
+  function openTaskDetail(task: TaskRelationSummary) {
+    if (!task.externalOnly) {
+      setExternalDetailTask(null);
+      showTaskDetail(task);
+      return;
+    }
+    setActionError(null);
+    void getLinearIssue(task.id).then(
+      (externalTask) => {
+        setExternalDetailTask(externalTask);
+        showTaskDetail(externalTask);
+      },
+      (error) => setActionError(errorMessage(error)),
+    );
+  }
+
   function closeTaskDetail() {
     const sourceProjectId = detailSourceProjectIdRef.current ?? selectedProjectId;
     detailSourceProjectIdRef.current = null;
     setDetailTaskIdentifier(null);
+    setExternalDetailTask(null);
     if (sourceProjectId !== selectedProjectId) {
       setSelectedProjectId(sourceProjectId);
       setBoardView(sourceProjectId === ALL_PROJECTS_ID ? "issues" : readProjectBoardView(sourceProjectId));
@@ -1502,6 +1528,24 @@ export function App() {
     const url = buildIssueUrl(window.location.href, sourceProjectId, null);
     window.history.replaceState(window.history.state, "", url);
   }
+
+  useEffect(() => {
+    if (
+      !detailTaskIdentifier
+      || externalDetailTask?.identifier.toLowerCase() === detailTaskIdentifier.toLowerCase()
+      || tasks.some((task) => task.identifier.toLowerCase() === detailTaskIdentifier.toLowerCase())
+      || archivedTasks.some((task) => task.identifier.toLowerCase() === detailTaskIdentifier.toLowerCase())
+      || selectedProjectId !== LINEAR_PROJECT_ID
+    ) return;
+    const controller = new AbortController();
+    void getLinearIssue(detailTaskIdentifier, controller.signal).then(
+      (externalTask) => setExternalDetailTask(externalTask),
+      (error) => {
+        if ((error as Error).name !== "AbortError") setActionError(errorMessage(error));
+      },
+    );
+    return () => controller.abort();
+  }, [archivedTasks, detailTaskIdentifier, externalDetailTask, selectedProjectId, tasks]);
 
   useLayoutEffect(() => {
     if (detailTaskIdentifier) return;

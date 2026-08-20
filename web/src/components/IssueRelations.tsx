@@ -151,6 +151,7 @@ export function IssuePickerContent({
 interface RelationActions {
   task: Task;
   tasks: Task[];
+  readOnly?: boolean;
   onOpenTask: (task: TaskRelationSummary) => void;
   onAddRelation: (
     task: Task,
@@ -237,12 +238,14 @@ function IssueRelationRow({
   onRemove,
   removing,
   showAssignee = false,
+  readOnly = false,
 }: {
   issue: TaskRelationSummary;
   onOpen: () => void;
   onRemove: () => void;
   removing: boolean;
   showAssignee?: boolean;
+  readOnly?: boolean;
 }) {
   const { text } = useTaskboardI18n();
   return (
@@ -253,7 +256,7 @@ function IssueRelationRow({
         <span className="issue-relation-title">{issue.title}</span>
         {showAssignee && <ActorAvatar actor={issue.assignee} className="issue-relation-assignee" />}
       </button>
-      {!issue.externalOnly && (
+      {!readOnly && !issue.externalOnly && (
         <button
           className="issue-relation-remove"
           type="button"
@@ -274,6 +277,7 @@ function IssueRelationRow({
 export function IssueParentLink({
   task,
   tasks,
+  readOnly = false,
   onOpenTask,
   onAddRelation,
   onRemoveRelation,
@@ -290,10 +294,6 @@ export function IssueParentLink({
   ));
   const openParent = () => {
     if (!parent) return;
-    if (parent.externalOnly && parent.externalUrl) {
-      window.open(parent.externalUrl, "_blank", "noopener,noreferrer");
-      return;
-    }
     onOpenTask(parent);
   };
 
@@ -304,6 +304,7 @@ export function IssueParentLink({
           <span className="issue-parent-prefix">{text("子议题属于", "Sub-issue of")}</span>
           <IssueRelationRow
             issue={parent}
+            readOnly={readOnly}
             removing={saving}
             onOpen={openParent}
             onRemove={() => {
@@ -315,7 +316,7 @@ export function IssueParentLink({
           />
         </>
       )}
-      <IssuePicker
+      {!readOnly && <IssuePicker
         label={parent
           ? text("更换父议题", "Change parent issue")
           : text("设置父议题", "Set parent issue")}
@@ -329,7 +330,7 @@ export function IssueParentLink({
             setSaving(false);
           }
         }}
-      />
+      />}
     </div>
   );
 }
@@ -337,6 +338,7 @@ export function IssueParentLink({
 export function IssueSubIssues({
   task,
   tasks,
+  readOnly = false,
   onOpenTask,
   onAddRelation,
   onRemoveRelation,
@@ -376,7 +378,7 @@ export function IssueSubIssues({
             </span>
           )}
         </div>
-        <IssuePicker
+        {!readOnly && <IssuePicker
           label={text("添加子议题", "Add sub-issue")}
           candidates={candidates}
           disabled={savingId !== null}
@@ -388,7 +390,7 @@ export function IssueSubIssues({
               setSavingId(null);
             }
           }}
-        />
+        />}
       </header>
       {subIssues.length > 0 && (
         <div className="issue-sub-issue-list">
@@ -397,6 +399,7 @@ export function IssueSubIssues({
             return (
               <IssueRelationRow
                 issue={issue}
+                readOnly={readOnly}
                 key={issue.id}
                 showAssignee
                 removing={savingId === issue.id}
@@ -426,6 +429,7 @@ const RELATION_GROUPS = [
 export function IssueRelationSidebar({
   task,
   tasks,
+  readOnly = false,
   onOpenTask,
   onAddRelation,
   onRemoveRelation,
@@ -442,10 +446,6 @@ export function IssueRelationSidebar({
   ));
   const openParent = () => {
     if (!parent) return;
-    if (parent.externalOnly && parent.externalUrl) {
-      window.open(parent.externalUrl, "_blank", "noopener,noreferrer");
-      return;
-    }
     onOpenTask(parent);
   };
 
@@ -455,7 +455,7 @@ export function IssueRelationSidebar({
       <div className="issue-relation-group is-parent">
         <header>
           <span><LinearIcon name="branch" />{text("父议题", "Parent issue")}</span>
-          <IssuePicker
+          {!readOnly && <IssuePicker
             label={parent
               ? text("更换父议题", "Change parent issue")
               : text("设置父议题", "Set parent issue")}
@@ -469,11 +469,12 @@ export function IssueRelationSidebar({
                 setSavingKey(null);
               }
             }}
-          />
+          />}
         </header>
         {parent && (
           <IssueRelationRow
             issue={parent}
+            readOnly={readOnly}
             removing={savingKey === `parent:${parent.id}`}
             onOpen={openParent}
             onRemove={() => {
@@ -505,7 +506,7 @@ export function IssueRelationSidebar({
                 )}
                 {label}
               </span>
-              <IssuePicker
+              {!readOnly && <IssuePicker
                 label={text(group.chineseAddLabel, group.englishAddLabel)}
                 candidates={candidates}
                 disabled={savingKey !== null}
@@ -518,11 +519,12 @@ export function IssueRelationSidebar({
                     setSavingKey(null);
                   }
                 }}
-              />
+              />}
             </header>
             {issues.map((issue) => (
               <IssueRelationRow
                 issue={issue}
+                readOnly={readOnly}
                 key={issue.id}
                 removing={savingKey === `${group.type}:${issue.id}`}
                 onOpen={() => onOpenTask(issue)}
