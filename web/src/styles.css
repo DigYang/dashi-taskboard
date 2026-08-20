@@ -4669,7 +4669,8 @@ kbd {
   box-shadow: 0 0 0 2px var(--accent-soft);
 }
 
-.jira-connection-dialog {
+.jira-connection-dialog,
+.linear-connection-dialog {
   width: min(400px, 100%);
 }
 

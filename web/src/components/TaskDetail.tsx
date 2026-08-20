@@ -1738,7 +1738,7 @@ export function TaskDetail({
                   icon: <ActorAvatar actor={actor} className="task-property-assignee-avatar" />,
                 }))}
                 open={propertyMenu === "assignee"}
-                disabled={currentTask.source === "jira" || savingProperty === "assignee"}
+                disabled={currentTask.source !== "local" || savingProperty === "assignee"}
                 className="detail-property-picker"
                 triggerClassName="detail-property-trigger"
                 ariaLabel={text("负责人", "Assignee")}
@@ -1768,8 +1768,8 @@ export function TaskDetail({
                 placeholder={text("添加标签…", "Add labels…")}
                 onOpenChange={(open) => setPropertyMenu(open ? "labels" : null)}
                 onChange={(nextLabels) => void saveTask({ labels: nextLabels }, "labels")}
-                onCreateLabel={onCreateLabel}
-                onDeleteLabel={currentTask.source === "jira" ? undefined : onDeleteLabel}
+                onCreateLabel={currentTask.source === "linear" ? undefined : onCreateLabel}
+                onDeleteLabel={currentTask.source === "local" ? onDeleteLabel : undefined}
               />
             </div>
             <div className="detail-property-row development-property">

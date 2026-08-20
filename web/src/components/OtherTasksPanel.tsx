@@ -51,7 +51,7 @@ function ArchivedTaskCard({
           <StatusIcon status={task.status} size={14} />
           {taskStatusLabel(language, task.status)}
         </span>
-        {task.source !== "jira" && (
+        {task.source === "local" && (
           <>
             <button
               className="archived-task-action archived-task-restore"
@@ -296,7 +296,9 @@ export function OtherTasksPanel({
               currentUser={currentUser}
               showCover={showCover}
               showBody={showBody}
-              onCreateLabel={(label) => onCreateLabel(label, task.projectId)}
+              onCreateLabel={task.source === "linear"
+                ? undefined
+                : (label) => onCreateLabel(label, task.projectId)}
               onEdit={onEdit}
               onUpdate={onUpdate}
               onContextMenu={onContextMenu}
