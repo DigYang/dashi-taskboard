@@ -86,11 +86,11 @@ test("task composer document converts only durable references and keeps slash an
   });
 });
 
-test("open in conversation rebinds durable references and hydrates only a fresh composer document", () => {
+test("open in new conversation bypasses AI chat while its durable reference rebind stays internal", () => {
   assert.match(apiSource, /"\/api\/local\/ai\/composer\/rebind"/);
-  assert.match(appSource, /inlineMediaComposerReferences\(descriptionSegments\)\.length === 0/);
-  assert.match(appSource, /await rebindAiChatComposerReferences\(\{/);
-  assert.match(appSource, /document: rebound\.ready \? rebound\.document : persistedDocument/);
+  assert.doesNotMatch(appSource, /rebindAiChatComposerReferences/);
+  assert.match(appSource, /type: "taskboard:create-thread"/);
+  assert.match(chatSource, /await rebindAiChatComposerReferences\(\{/);
   assert.match(chatSource, /if \(!unavailable\) tokenElement\.dataset\.composerCandidateRef = node\.candidateRef/);
   assert.match(chatSource, /setComposerRevision\(composerDraft\.revision\)/);
   assert.match(chatSource, /\|\| composerRebindBlocked/);

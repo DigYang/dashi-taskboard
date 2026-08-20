@@ -266,8 +266,8 @@ test("issues start a native Codex conversation in the confirmed project with the
   assert.match(source, /requestNativeFetch\("active-workspace-roots", \{\}\)/);
   assert.match(source, /function normalizeNativeRootPath\(value\)/);
   assert.match(source, /async function resolveNativeProject\(requestedProjectId, workspacePath\)/);
-  assert.match(source, /workspacePath\) \{\s*return normalizeNativeRootPath\(workspacePath\) \? \{ targetRoot: workspacePath \} : null/);
-  assert.match(source, /const targetRoot = project\?\.rootPaths\[0\]/);
+  assert.match(source, /candidate\.id === requestedProjectId\s*\|\|\s*candidate\.rootPaths\.some/);
+  assert.match(source, /const targetRoot = normalizedWorkspacePath \? workspacePath : project\?\.rootPaths\[0\]/);
   assert.match(source, /async function waitForNativeProject\(targetRoot\)/);
   const waitStart = source.indexOf("async function waitForNativeProject");
   const waitSource = source.slice(waitStart, source.indexOf("async function createThreadForTask", waitStart));
@@ -276,9 +276,8 @@ test("issues start a native Codex conversation in the confirmed project with the
   assert.match(waitSource, /projectId\s*&&\s*normalizeNativeRootPath\(activeRoots\[0\]\) === normalizedTargetRoot/);
   assert.match(
     source,
-    /requestNativeFetch\("add-workspace-root-option", \{\s*root: targetRoot,\s*setActive: true,\s*origin: window\.location\.origin,/,
+    /bridge\.sendMessageFromView\(\{\s*type: "electron-add-new-workspace-root-option",\s*root: targetRoot,/,
   );
-  assert.match(source, /if \(switched\?\.success !== true\)/);
   assert.match(source, /await waitForNativeProject\(targetRoot\)/);
   assert.match(
     createThreadSource,
@@ -290,10 +289,10 @@ test("issues start a native Codex conversation in the confirmed project with the
   assert.match(source, /const HOST_REQUEST_TIMEOUT_MS = 12_000/);
   assert.match(source, /const TASK_CONVERSATION_REQUEST_TIMEOUT_MS = 75_000/);
   assert.match(source, /function requestHost\(action, payload = \{\}, timeoutMs = HOST_REQUEST_TIMEOUT_MS\)/);
-  assert.match(source, /requestHostTaskConversationStart\(\{\s*taskId,\s*previousThreadId,\s*codexHostId,\s*targetRoot,\s*instruction,\s*title,/);
+  assert.match(source, /requestHostTaskConversationStart\(\{\s*taskId,\s*previousThreadId,\s*codexHostId,\s*projectless,\s*targetRoot,\s*instruction,\s*title,/);
   assert.match(
     source,
-    /requestHost\("start-task-conversation", \{\s*taskId,\s*previousThreadId,\s*codexHostId,\s*targetRoot,\s*instruction,\s*title,\s*\}, TASK_CONVERSATION_REQUEST_TIMEOUT_MS\)/,
+    /requestHost\("start-task-conversation", \{\s*taskId,\s*previousThreadId,\s*codexHostId,\s*projectless,\s*targetRoot,\s*instruction,\s*title,\s*\}, TASK_CONVERSATION_REQUEST_TIMEOUT_MS\)/,
   );
   assert.match(source, /lastNativeThreadId = startedThreadId/);
   assert.match(source, /type: "taskboard:thread-prepared", payload: \{ taskId, threadId: started\.threadId \}/);
@@ -370,11 +369,11 @@ test("host navigation follows Codex's renderer message bus", () => {
 test("the standalone web page reports that new Codex conversations require the embedded Taskboard", () => {
   assert.match(
     webApp,
-    /setActionError\(\[\s*"在对话中打开仅可在 Codex 内嵌任务面板中使用。请从 Codex 侧栏打开任务面板后重试。",/,
+    /setActionError\(\[\s*"在新对话打开仅可在 Codex 内嵌任务面板中使用。请从 Codex 侧栏打开任务面板后重试。",/,
   );
   assert.match(
     webApp,
-    /"Open in conversation is available only in the embedded Codex Taskboard\. Open Taskboard from the Codex sidebar and try again\.",/,
+    /"Open in new conversation is available only in the embedded Codex Taskboard\. Open Taskboard from the Codex sidebar and try again\.",/,
   );
   assert.doesNotMatch(webApp, /codex:\/\/new/);
 });

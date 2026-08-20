@@ -69,9 +69,15 @@ function parseHostRequest(payload, parseAutomationRequest) {
     && request.codexHostId.length > 0
     && request.codexHostId.length <= 240
     && !/[\u0000-\u001f\u007f]/.test(request.codexHostId)
-    && typeof request.targetRoot === "string"
-    && request.targetRoot.length > 0
-    && request.targetRoot.length <= 4_096
+    && typeof request.projectless === "boolean"
+    && (
+      request.projectless
+      || (
+        typeof request.targetRoot === "string"
+        && request.targetRoot.length > 0
+        && request.targetRoot.length <= 4_096
+      )
+    )
     && typeof request.instruction === "string"
     && request.instruction.length > 0
     && request.instruction.length <= 4_000_000

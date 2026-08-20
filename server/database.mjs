@@ -2595,11 +2595,22 @@ export class TaskboardDatabase {
       if (chunk.length === 0) continue;
       const placeholders = chunk.map(() => "?").join(", ");
       const rows = this.database.prepare(`
-        SELECT * FROM attachments
-        WHERE task_id IN (${placeholders})
-          AND comment_id IS NULL
-          AND content_type LIKE 'image/%'
-        ORDER BY task_id, created_at, id
+        SELECT attachments.*
+        FROM attachments
+        JOIN tasks ON tasks.id = attachments.task_id
+        WHERE attachments.task_id IN (${placeholders})
+          AND attachments.comment_id IS NULL
+          AND attachments.content_type LIKE 'image/%'
+          AND (
+            attachments.kind = 'attachment'
+            OR instr(tasks.description, 'api/attachments/' || attachments.id || '/content') > 0
+            OR EXISTS (
+              SELECT 1 FROM comments
+              WHERE comments.task_id = attachments.task_id
+                AND instr(comments.body, 'api/attachments/' || attachments.id || '/content') > 0
+            )
+          )
+        ORDER BY attachments.task_id, attachments.created_at, attachments.id
       `).all(...chunk);
       for (const row of rows) {
         if (!imagesByTask.has(row.task_id)) imagesByTask.set(row.task_id, attachmentFromRow(row));

@@ -142,7 +142,7 @@ test("common issue mutations enter a Linear-style undo queue", () => {
 });
 
 test("issues expose processing conversations without manual binding", () => {
-  assert.match(detailSource, /在对话中打开/);
+  assert.match(detailSource, /在新对话打开/);
   assert.match(detailSource, /onOpenInThread\(currentTask\)/);
   assert.doesNotMatch(appSource, /detail-thread-button/);
   assert.doesNotMatch(detailSource, /输入对话 ID|解除 Codex 对话绑定|>绑定</);

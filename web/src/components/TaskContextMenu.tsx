@@ -415,7 +415,7 @@ export function TaskContextMenu({
           )}
         </MenuItem>
         <MenuItem
-          label={text("在对话中打开", "Open in conversation")}
+          label={text("在新对话打开", "Open in new conversation")}
           icon={<LinearIcon name="link" />}
           onPointerEnter={closeSubmenu}
           onClick={() => closeThen(() => onOpenInThread(task))}

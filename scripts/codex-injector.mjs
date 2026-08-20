@@ -88,7 +88,7 @@ const codexAutomationMethods = new Set([
 let codexAutomationRequestSequence = 0;
 let codexAppServerRequestSequence = 0;
 const taskConversationOperations = new Map();
-const taskConversationOperationTtlMs = 120_000;
+const taskConversationFailureTtlMs = 120_000;
 const quotaPolicyTimers = new Map();
 const quotaPolicyRecords = new Map();
 const quotaPolicyQueues = new Map();
@@ -1411,7 +1411,14 @@ async function restoreQuotaPolicies(cdp) {
 }
 
 async function startTaskConversationViaCdp(cdp, executionContextId, request) {
-  const { codexHostId, instruction, previousThreadId, targetRoot, title } = request;
+  const {
+    codexHostId,
+    instruction,
+    previousThreadId,
+    projectless,
+    targetRoot,
+    title,
+  } = request;
   const normalizeWorkspaceRoot = (value) => {
     const root = String(value || "").trim();
     if (!root) return "";
@@ -1442,7 +1449,7 @@ async function startTaskConversationViaCdp(cdp, executionContextId, request) {
           !root
           || conversationId
           || !editor
-          || (editor.textContent || "") !== ${JSON.stringify(instruction)}
+          || (editor.innerText || "") !== ${JSON.stringify(instruction)}
         ) return false;
         editor.focus();
         return true;
@@ -1508,7 +1515,10 @@ async function startTaskConversationViaCdp(cdp, executionContextId, request) {
             );
             if (
               result?.thread?.id === threadId
-              && normalizeWorkspaceRoot(result.thread.cwd) === normalizedTargetRoot
+              && (
+                projectless
+                || normalizeWorkspaceRoot(result.thread.cwd) === normalizedTargetRoot
+              )
             ) {
               ready = true;
               break;
@@ -1516,7 +1526,11 @@ async function startTaskConversationViaCdp(cdp, executionContextId, request) {
           } catch {}
           await new Promise((resolve) => setTimeout(resolve, 80));
         }
-        if (!ready) throw new Error("Codex did not confirm the task conversation workspace root");
+        if (!ready) {
+          throw new Error(projectless
+            ? "Codex did not confirm the projectless task conversation"
+            : "Codex did not confirm the task conversation workspace root");
+        }
 
         try {
           await requestCodexAppServerViaCdp(
@@ -1584,15 +1598,26 @@ function getOrStartTaskConversation(cdp, executionContextId, request) {
   ));
   operation.promise = promise;
   taskConversationOperations.set(request.taskId, operation);
-  const retainSettledOperation = () => {
+  const clearSettledOperation = () => {
+    if (taskConversationOperations.get(request.taskId) === operation) {
+      taskConversationOperations.delete(request.taskId);
+    }
+  };
+  const retainCreatedOrUncertainFailure = (error) => {
+    if (!(
+      error
+      && typeof error === "object"
+      && (typeof error.threadId === "string" || error.uncertain === true)
+    )) {
+      clearSettledOperation();
+      return;
+    }
     const timer = setTimeout(() => {
-      if (taskConversationOperations.get(request.taskId) === operation) {
-        taskConversationOperations.delete(request.taskId);
-      }
-    }, taskConversationOperationTtlMs);
+      clearSettledOperation();
+    }, taskConversationFailureTtlMs);
     timer.unref?.();
   };
-  void promise.then(retainSettledOperation, retainSettledOperation);
+  void promise.then(clearSettledOperation, retainCreatedOrUncertainFailure);
   return promise;
 }
 

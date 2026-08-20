@@ -4460,6 +4460,15 @@ kbd {
   appearance: none;
 }
 
+.detail-date-property-row,
+.detail-date-property-row input {
+  cursor: pointer;
+}
+
+.detail-date-property-row input::-webkit-calendar-picker-indicator {
+  display: none;
+}
+
 .detail-property-picker {
   grid-column: 2;
   grid-row: 1;

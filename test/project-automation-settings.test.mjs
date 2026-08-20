@@ -75,18 +75,18 @@ test("project mapping is based on exact ids and workspace paths, never project n
   assert.doesNotMatch(appSource, /project\.name === selectedProject\.name/);
 });
 
-test("global tasks resolve thread metadata from the active Codex project", () => {
+test("global tasks open a projectless conversation", () => {
   const openTaskSource = appSource.slice(
     appSource.indexOf("function codexProjectContextForTaskProject"),
     appSource.indexOf("function changeProject"),
   );
   assert.match(
     openTaskSource,
-    /const effectiveCodexProjectId = taskboardProjectId === GLOBAL_PROJECT_ID\s*\? hostContext\?\.projectId\s*: taskboardProjectId/,
+    /if \(taskboardProjectId === GLOBAL_PROJECT_ID\) return null/,
   );
   assert.match(
     openTaskSource,
-    /hostContext\?\.projects\?\.find\(\s*\(project\) => project\.id === effectiveCodexProjectId/,
+    /const projectless = task\.projectId === GLOBAL_PROJECT_ID/,
   );
   assert.match(openTaskSource, /codexProjectId: codexProject\.id,\s*codexProjectKind: codexProject\.projectKind/);
   assert.match(openTaskSource, /const savedRemoteIdentity = projectCodexIdentities\[task\.projectId\]/);

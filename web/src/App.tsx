@@ -49,7 +49,6 @@ import {
   listTasks,
   moveTask as moveTaskRequest,
   publishHostRuntime,
-  rebindAiChatComposerReferences,
   removeTaskRelation,
   resolveTaskboardUrl,
   restoreTask as restoreTaskRequest,
@@ -74,8 +73,6 @@ import { JiraConnectionDialog } from "./components/JiraConnectionDialog";
 import { LinearConnectionDialog } from "./components/LinearConnectionDialog";
 import { OtherTasksPanel } from "./components/OtherTasksPanel";
 import {
-  createInlineMediaSegments,
-  inlineMediaComposerReferences,
   resolveInlineMediaMarkdown,
   type PendingInlineImage,
 } from "./components/InlineMediaComposer";
@@ -108,7 +105,6 @@ import {
   type OtherTaskTab,
 } from "./issueBoardStatuses";
 import {
-  buildPersistedTaskComposerDocument,
   normalizeCodexThreadId,
   taskCardPresentation,
   type TaskCardPresentation,
@@ -123,7 +119,6 @@ import {
   writeTaskFilters,
 } from "./taskFilters";
 import {
-  COMPOSER_CONTRACT_VERSION,
   TASK_STATUSES,
   type ActorIdentity,
   type AiChatThread,
@@ -2695,6 +2690,7 @@ export function App() {
   }
 
   function codexProjectContextForTaskProject(taskboardProjectId: string) {
+    if (taskboardProjectId === GLOBAL_PROJECT_ID) return null;
     const taskboardProject = projects.find((project) => project.id === taskboardProjectId);
     const savedIdentity = projectCodexIdentities[taskboardProjectId];
     if (savedIdentity?.codexProjectKind === "remote") {
@@ -2707,17 +2703,12 @@ export function App() {
         ? savedIdentity
         : null;
     }
-    const effectiveCodexProjectId = taskboardProjectId === GLOBAL_PROJECT_ID
-      ? hostContext?.projectId
-      : taskboardProjectId;
     const directCodexProject = hostContext?.projects?.find(
-      (project) => project.id === effectiveCodexProjectId,
+      (project) => project.id === taskboardProjectId,
     );
-    const mappedWorkspacePath = taskboardProjectId === GLOBAL_PROJECT_ID
-      ? directCodexProject?.workspacePath ?? hostContext?.workspacePath
-      : deviceWorkspacePaths[taskboardProjectId]
-        ?? taskboardProject?.workspacePath
-        ?? directCodexProject?.workspacePath;
+    const mappedWorkspacePath = deviceWorkspacePaths[taskboardProjectId]
+      ?? taskboardProject?.workspacePath
+      ?? directCodexProject?.workspacePath;
     const codexProject = directCodexProject ?? hostContext?.projects?.find(
       (project) => project.workspacePath === mappedWorkspacePath,
     );
@@ -3020,6 +3011,7 @@ export function App() {
           codexHostId: identity.codexHostId,
           codexProjectWorkspacePath: identity.workspacePath,
           workspacePath: identity.workspacePath,
+          projectless: false,
         },
       });
     } catch (error) {
@@ -3035,9 +3027,8 @@ export function App() {
   }
 
   async function openTaskInThread(task: Task) {
-    const worktreePath = task.developmentContext?.type === "worktree"
-      ? task.developmentContext.path
-      : null;
+    const projectless = task.projectId === GLOBAL_PROJECT_ID;
+    const taskboardProject = projects.find((project) => project.id === task.projectId);
     const savedRemoteIdentity = projectCodexIdentities[task.projectId]?.codexProjectKind === "remote"
       ? projectCodexIdentities[task.projectId]
       : null;
@@ -3053,22 +3044,19 @@ export function App() {
       ));
       return;
     }
-    const workspacePath = worktreePath
-      ?? codexProjectContext?.workspacePath
-      ?? selectedDeviceWorkspacePath
-      ?? selectedProject?.workspacePath
-      ?? (
-        selectedProject?.id === GLOBAL_PROJECT_ID
-        || hostContext?.projectId === selectedProject?.id
-          ? hostContext?.workspacePath
-          : undefined
-      );
+    const workspacePath = projectless
+      ? undefined
+      : task.developmentContext?.type === "worktree"
+        ? task.developmentContext.path
+        : codexProjectContext?.workspacePath
+          ?? deviceWorkspacePaths[task.projectId]
+          ?? taskboardProject?.workspacePath;
     const instruction = `e-taskboard 处理任务面板任务 ${task.identifier}，并同步进度状态。`;
 
     if (!embedded || window.parent === window) {
       setActionError([
-        "在对话中打开仅可在 Codex 内嵌任务面板中使用。请从 Codex 侧栏打开任务面板后重试。",
-        "Open in conversation is available only in the embedded Codex Taskboard. Open Taskboard from the Codex sidebar and try again.",
+        "在新对话打开仅可在 Codex 内嵌任务面板中使用。请从 Codex 侧栏打开任务面板后重试。",
+        "Open in new conversation is available only in the embedded Codex Taskboard. Open Taskboard from the Codex sidebar and try again.",
       ]);
       return;
     }
@@ -3116,47 +3104,6 @@ export function App() {
         )).join("\n")
       : "（无）"}`;
     const embeddedInstruction = `${beforeDescription}${task.description}${afterDescription}`;
-    if (localAiChatAvailable) {
-      setActionError(null);
-      const descriptionSegments = createInlineMediaSegments(task.description, referenceTasks);
-      if (inlineMediaComposerReferences(descriptionSegments).length === 0) {
-        setAiOpenThreadRequest((current) => ({
-          projectId: task.projectId,
-          issueId: task.id,
-          composerText: embeddedInstruction,
-          requestId: (current?.requestId ?? 0) + 1,
-        }));
-        return;
-      }
-      const persistedDocument = buildPersistedTaskComposerDocument(
-        beforeDescription,
-        descriptionSegments,
-        afterDescription,
-      );
-      setOpeningThreadTaskId(task.id);
-      try {
-        const rebound = await rebindAiChatComposerReferences({
-          contractVersion: COMPOSER_CONTRACT_VERSION,
-          projectId: task.projectId,
-          document: persistedDocument,
-        });
-        setAiOpenThreadRequest((current) => ({
-          projectId: task.projectId,
-          issueId: task.id,
-          composerDraft: {
-            ready: rebound.ready,
-            revision: rebound.revision,
-            document: rebound.ready ? rebound.document : persistedDocument,
-          },
-          requestId: (current?.requestId ?? 0) + 1,
-        }));
-      } catch (error) {
-        setActionError(errorMessage(error));
-      } finally {
-        setOpeningThreadTaskId(null);
-      }
-      return;
-    }
     setOpeningThreadTaskId(task.id);
     setActionError(null);
     if (codexProjectContext?.codexProjectKind === "remote" && codexProjectContext.workspacePath) {
@@ -3175,7 +3122,8 @@ export function App() {
         description: task.description,
         canonicalReferences,
         instruction: embeddedInstruction,
-        projectName: selectedProject?.name,
+        projectName: taskboardProject?.name,
+        projectless,
         codexProjectId: codexProjectContext?.codexProjectId,
         codexProjectKind: codexProjectContext?.codexProjectKind ?? "local",
         codexHostId: codexProjectContext?.codexHostId ?? "local",
