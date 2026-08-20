@@ -42,7 +42,7 @@ interface TaskCardProps {
   currentUser: ActorIdentity;
   showCover: boolean;
   showBody: boolean;
-  onCreateLabel: (label: string) => Promise<void>;
+  onCreateLabel?: (label: string) => Promise<void>;
   onEdit: (task: Task) => void;
   onUpdate: (task: Task, changes: Partial<TaskDraft>) => Promise<Task>;
   onComplete?: (task: Task) => void;
@@ -498,7 +498,7 @@ export function TaskCard({
               task={task}
               participants={task.participants.length ? task.participants : [creator]}
               currentUser={currentUser}
-              disabled={propertyDisabled || task.source === "jira"}
+              disabled={propertyDisabled || task.source !== "local"}
               open={propertyMenu === "assignee"}
               onOpenChange={(open) => setPropertyMenu(open ? "assignee" : null)}
               onChange={(assigneeTarget) => updateProperty({ assigneeTarget }, "assignee")}
@@ -562,7 +562,7 @@ export function TaskCard({
               task={task}
               participants={task.participants}
               currentUser={currentUser}
-              disabled={propertyDisabled || task.source === "jira"}
+              disabled={propertyDisabled || task.source !== "local"}
               open={propertyMenu === "assignee"}
               onOpenChange={(open) => setPropertyMenu(open ? "assignee" : null)}
               onChange={(assigneeTarget) => updateProperty({ assigneeTarget }, "assignee")}

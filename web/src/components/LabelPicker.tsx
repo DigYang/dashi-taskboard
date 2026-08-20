@@ -16,7 +16,7 @@ interface LabelPickerProps {
   triggerContent?: ReactNode;
   onOpenChange: (open: boolean) => void;
   onChange: (labels: string[]) => void;
-  onCreateLabel: (label: string) => Promise<void>;
+  onCreateLabel?: (label: string) => Promise<void>;
   onDeleteLabel?: (label: string) => Promise<void>;
 }
 
@@ -48,7 +48,7 @@ export function LabelPicker({
     || label.toLocaleLowerCase().includes(normalizedSearch.toLocaleLowerCase())
     || labelDisplayName(label, language).toLocaleLowerCase().includes(normalizedSearch.toLocaleLowerCase())
   ));
-  const canCreateLabel = Boolean(normalizedSearch) && !availableLabels.some((label) => (
+  const canCreateLabel = Boolean(onCreateLabel && normalizedSearch) && !availableLabels.some((label) => (
     label === normalizedSearch
     || labelDisplayName(label, language).toLocaleLowerCase() === normalizedSearch.toLocaleLowerCase()
   ));
@@ -86,6 +86,7 @@ export function LabelPicker({
   }
 
   async function createLabel() {
+    if (!onCreateLabel) return;
     const label = normalizedSearch;
     setPendingLabel(label);
     try {

@@ -233,7 +233,9 @@ export function BoardColumn({
               currentUser={currentUser}
               showCover={showCover}
               showBody={showBody}
-              onCreateLabel={(label) => onCreateLabel(label, task.projectId)}
+              onCreateLabel={task.source === "linear"
+                ? undefined
+                : (label) => onCreateLabel(label, task.projectId)}
               onEdit={onEdit}
               onUpdate={onUpdate}
               onComplete={onComplete}
