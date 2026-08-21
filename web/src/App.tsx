@@ -1093,9 +1093,11 @@ export function App() {
     [archivedTasks, externalDetailTask, tasks],
   );
   const detailTask = detailTaskIdentifier
-    ? referenceTasks.find(
-      (task) => task.identifier.toLowerCase() === detailTaskIdentifier.toLowerCase(),
-    ) ?? null
+    ? externalDetailTask?.identifier.toLowerCase() === detailTaskIdentifier.toLowerCase()
+      ? externalDetailTask
+      : referenceTasks.find(
+        (task) => task.identifier.toLowerCase() === detailTaskIdentifier.toLowerCase(),
+      ) ?? null
     : null;
   const detailTaskId = detailTask?.id ?? null;
   const contextMenuTask = contextMenu
@@ -1533,8 +1535,6 @@ export function App() {
     if (
       !detailTaskIdentifier
       || externalDetailTask?.identifier.toLowerCase() === detailTaskIdentifier.toLowerCase()
-      || tasks.some((task) => task.identifier.toLowerCase() === detailTaskIdentifier.toLowerCase())
-      || archivedTasks.some((task) => task.identifier.toLowerCase() === detailTaskIdentifier.toLowerCase())
       || selectedProjectId !== LINEAR_PROJECT_ID
     ) return;
     const controller = new AbortController();
@@ -1545,7 +1545,7 @@ export function App() {
       },
     );
     return () => controller.abort();
-  }, [archivedTasks, detailTaskIdentifier, externalDetailTask, selectedProjectId, tasks]);
+  }, [detailTaskIdentifier, externalDetailTask, selectedProjectId]);
 
   useLayoutEffect(() => {
     if (detailTaskIdentifier) return;
