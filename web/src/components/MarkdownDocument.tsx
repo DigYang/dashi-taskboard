@@ -16,7 +16,7 @@ import ReactMarkdown, { defaultUrlTransform } from "react-markdown";
 import { decodeString } from "micromark-util-decode-string";
 import remarkBreaks from "remark-breaks";
 import remarkGfm from "remark-gfm";
-import { resolvePersistedAttachmentUrl } from "../api";
+import { resolveLinearImageUrl, resolvePersistedAttachmentUrl } from "../api";
 import { useTaskboardI18n } from "../i18n";
 
 interface MarkdownAstNode {
@@ -523,6 +523,7 @@ export function MarkdownDocument({
             return (
               <img
                 {...props}
+                src={resolveLinearImageUrl(props.src)}
                 data-taskboard-inline-media-markdown={selfContainedMarkdown}
               />
             );
