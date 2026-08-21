@@ -4377,6 +4377,7 @@ export function App() {
             ? null
             : newTaskDraft.draft}
           labels={availableLabels}
+          codexProjects={isLinearProject ? hostContext?.projects : undefined}
           currentUser={editorCurrentUser}
           availableAssignees={isLinearProject ? linearConnection?.members : undefined}
           developmentScan={developmentScan}

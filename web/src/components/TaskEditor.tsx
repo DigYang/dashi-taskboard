@@ -97,6 +97,7 @@ interface TaskEditorProps {
   initialStatus: TaskStatus;
   initialDraft: NewTaskEditorDraft | null;
   labels: string[];
+  codexProjects?: Array<{ id: string; name: string; workspacePath?: string }>;
   currentUser: ActorIdentity;
   availableAssignees?: ActorIdentity[];
   developmentScan: DevelopmentScan;
@@ -156,6 +157,7 @@ export function TaskEditor({
   initialStatus,
   initialDraft,
   labels: availableLabels,
+  codexProjects = [],
   currentUser,
   availableAssignees,
   developmentScan,
@@ -190,7 +192,7 @@ export function TaskEditor({
   const [relatedIds, setRelatedIds] = useState<string[]>(initialDraft?.relations.relatedIds ?? []);
   const [subIssueIds, setSubIssueIds] = useState<string[]>(initialDraft?.relations.subIssueIds ?? []);
   const [createMore, setCreateMore] = useState(false);
-  const [menu, setMenu] = useState<"status" | "priority" | "assignee" | "labels" | "development" | "more" | "due" | "recurrence" | null>(null);
+  const [menu, setMenu] = useState<"status" | "priority" | "codexProject" | "assignee" | "labels" | "development" | "more" | "due" | "recurrence" | null>(null);
   const [relationMenu, setRelationMenu] = useState<DraftRelationMenu | null>(null);
   const [moreMenuPosition, setMoreMenuPosition] = useState<{ right: number; bottom: number } | null>(null);
   const [expanded, setExpanded] = useState(false);
@@ -206,6 +208,9 @@ export function TaskEditor({
     }
     return options;
   }, [developmentContext, developmentScan.contexts]);
+  const selectedCodexProjectId = developmentContext?.type === "worktree"
+    ? codexProjects.find((project) => project.workspacePath === developmentContext.path)?.id ?? ""
+    : "";
 
   const taskById = useMemo(() => new Map(tasks.map((candidate) => [candidate.id, candidate])), [tasks]);
   const availableRelationTasks = tasks.filter((candidate) => candidate.archivedAt === null);
@@ -606,6 +611,36 @@ export function TaskEditor({
               onOpenChange={(open) => setMenu(open ? "priority" : null)}
               onChange={setPriority}
             />
+            {!task && codexProjects.some((project) => project.workspacePath) && (
+              <TaskPropertyPicker
+                value={selectedCodexProjectId}
+                options={[
+                  {
+                    value: "",
+                    label: text("代码项目", "Code project"),
+                    icon: <LinearIcon name="folder" />,
+                  },
+                  ...codexProjects.filter((project) => project.workspacePath).map((project) => ({
+                    value: project.id,
+                    label: project.name,
+                    icon: <LinearIcon name="folder" />,
+                  })),
+                ]}
+                open={menu === "codexProject"}
+                triggerClassName="property-control property-codex-project"
+                ariaLabel={text("代码项目", "Code project")}
+                searchable
+                searchPlaceholder={text("搜索代码项目…", "Search code projects…")}
+                emptyText={text("没有匹配的项目", "No matching projects")}
+                onOpenChange={(open) => setMenu(open ? "codexProject" : null)}
+                onChange={(value) => {
+                  const selected = codexProjects.find((project) => project.id === value);
+                  setDevelopmentContext(selected?.workspacePath
+                    ? { type: "worktree", path: selected.workspacePath, branch: null }
+                    : null);
+                }}
+              />
+            )}
             <TaskPropertyPicker
               value={actorKey(assignee)}
               options={assigneeOptions.map((actor) => ({

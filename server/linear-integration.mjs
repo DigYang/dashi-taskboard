@@ -589,7 +589,10 @@ export function createLinearIntegration({ configStore, database, fetch: fetchImp
       }
       const issue = data.issueCreate.issue;
       if (issue.identifier && issue.team?.id) issueTeams.set(issue.identifier, issue.team.id);
-      const normalized = normalizeIssue(issue, config);
+      const normalized = {
+        ...normalizeIssue(issue, config),
+        developmentContext: input.developmentContext ?? null,
+      };
       database.syncLinearTasks([normalized], {
         archiveMissing: false,
         projectName: `Linear · ${config.organizationName}`,
