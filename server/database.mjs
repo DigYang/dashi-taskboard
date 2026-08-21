@@ -307,6 +307,20 @@ function taskRelationSummaryFromRow(row) {
   };
 }
 
+function taskRelationSummaryFromTask(task) {
+  return {
+    id: task.id,
+    identifier: task.identifier,
+    externalKey: task.externalKey ?? null,
+    projectId: task.projectId,
+    title: task.title,
+    status: task.status,
+    priority: task.priority,
+    assignee: task.assignee,
+    archivedAt: task.archivedAt,
+  };
+}
+
 function commentFromRow(row) {
   return {
     id: row.id,
@@ -2038,6 +2052,19 @@ export class TaskboardDatabase {
     return attachTaskActivity(task, comments, activities, previewImage);
   }
 
+  getExecutionGroup(id) {
+    const row = this.database.prepare("SELECT * FROM tasks WHERE id = ? OR identifier = ?").get(id, id);
+    if (!row) return null;
+    const task = this.#taskWithRelations(row);
+    if (!task.relations.parent) {
+      return { anchor: taskRelationSummaryFromRow(row), tasks: [taskFromRow(row)] };
+    }
+    return {
+      anchor: task.relations.parent,
+      tasks: this.#executionGroupRows(task, task.relations.parent).map(taskFromRow),
+    };
+  }
+
   createTask(input) {
     this.database.exec("BEGIN IMMEDIATE");
     try {
@@ -2936,7 +2963,52 @@ export class TaskboardDatabase {
       blocks: blocks.map(taskRelationSummaryFromRow),
       related: related.map(taskRelationSummaryFromRow),
     };
+    if (task.relations.parent) {
+      const groupTasks = this.#executionGroupRows(task, task.relations.parent).map(taskFromRow);
+      const position = groupTasks.findIndex((candidate) => candidate.id === task.id);
+      const waitingOn = position > 0
+        ? groupTasks.slice(0, position).find((candidate) => ![
+            "in_review",
+            "in_test",
+            "done",
+            "canceled",
+          ].includes(candidate.status)) ?? null
+        : null;
+      task.executionGroup = {
+        parentId: task.relations.parent.id,
+        parentIdentifier: task.relations.parent.externalKey ?? task.relations.parent.identifier,
+        parentTitle: task.relations.parent.title,
+        position: position < 0 ? 1 : position + 1,
+        total: groupTasks.length,
+        ready: waitingOn === null,
+        waitingOn: waitingOn ? taskRelationSummaryFromTask(waitingOn) : null,
+      };
+    } else {
+      task.executionGroup = null;
+    }
     return task;
+  }
+
+  #executionGroupRows(task, parent) {
+    if (task.source === "linear") {
+      return this.database.prepare(`
+        SELECT * FROM tasks
+        WHERE external_source = 'linear'
+          AND archived_at IS NULL
+          AND json_valid(external_parent)
+          AND json_extract(external_parent, '$.id') = ?
+        ORDER BY created_at, id
+      `).all(parent.id);
+    }
+    return this.database.prepare(`
+      SELECT tasks.*
+      FROM task_relations
+      JOIN tasks ON tasks.id = task_relations.target_task_id
+      WHERE task_relations.relation_type = 'parent'
+        AND task_relations.source_task_id = ?
+        AND tasks.archived_at IS NULL
+      ORDER BY tasks.created_at, tasks.id
+    `).all(parent.id);
   }
 
   #validateRelationTasks(task, relatedTask) {

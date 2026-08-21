@@ -649,7 +649,7 @@ export async function prepareTaskWorktree(task: Task): Promise<Task> {
 export async function releaseTaskWorktree(task: Task): Promise<{
   task: Task;
   released: boolean;
-  reason: "dirty" | "unmerged" | null;
+  reason: "dirty" | "unmerged" | "group-active" | null;
 }> {
   return request(`/api/tasks/${encodeURIComponent(task.id)}/release-worktree`, {
     method: "POST",

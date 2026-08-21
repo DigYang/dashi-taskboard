@@ -3290,7 +3290,24 @@ export function createTaskboardServer(options = {}) {
           if (current.status !== "in_progress") {
             throw new ApiError(409, "TASK_NOT_IN_PROGRESS", "任务进入进行中后才能创建 Worktree");
           }
-          const worktree = await worktrees.prepare(current);
+          const executionGroup = database.getExecutionGroup(id);
+          const currentIndex = executionGroup.tasks.findIndex((task) => task.id === current.id);
+          const waitingOn = currentIndex > 0
+            ? executionGroup.tasks.slice(0, currentIndex).find((task) => ![
+                "in_review",
+                "in_test",
+                "done",
+                "canceled",
+              ].includes(task.status))
+            : null;
+          if (waitingOn) {
+            throw new ApiError(
+              409,
+              "EXECUTION_GROUP_WAITING",
+              `请先完成同一父议题下更早创建的子议题 ${waitingOn.externalKey ?? waitingOn.identifier} · ${waitingOn.title}`,
+            );
+          }
+          const worktree = await worktrees.prepare(current, executionGroup);
           const task = current.managedWorktree
             ? current
             : database.setManagedWorktree(id, version, worktree, actorFromRequest(request));
@@ -3307,11 +3324,40 @@ export function createTaskboardServer(options = {}) {
               actualVersion: current.version,
             });
           }
+          const executionGroup = database.getExecutionGroup(id);
+          const unfinishedSibling = executionGroup.tasks.find((task) => (
+            task.id !== current.id && !["done", "canceled"].includes(task.status)
+          ));
+          if (unfinishedSibling) {
+            return sendJson(response, 200, {
+              task: current,
+              released: false,
+              reason: "group-active",
+            });
+          }
           const result = await worktrees.release(current);
-          const task = result.released
-            ? database.clearManagedWorktree(id, version, actorFromRequest(request))
-            : current;
-          if (result.released) events.emit("task.updated", { task });
+          let task = current;
+          if (result.released) {
+            const sharedPath = current.developmentContext?.type === "worktree"
+              ? current.developmentContext.path
+              : null;
+            const groupedTasks = sharedPath
+              ? executionGroup.tasks.filter((candidate) => (
+                  candidate.managedWorktree
+                  && candidate.developmentContext?.type === "worktree"
+                  && candidate.developmentContext.path === sharedPath
+                ))
+              : [current];
+            for (const candidate of groupedTasks) {
+              const cleared = database.clearManagedWorktree(
+                candidate.id,
+                candidate.version,
+                actorFromRequest(request),
+              );
+              if (candidate.id === current.id) task = cleared;
+              events.emit("task.updated", { task: cleared });
+            }
+          }
           return sendJson(response, 200, { task, released: result.released, reason: result.reason });
         }
         if (action === "move" && request.method === "POST") {

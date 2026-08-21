@@ -47,7 +47,7 @@ export function createWorktreeManager({ dataDirectory }) {
   const worktreesDirectory = path.join(dataDirectory, "worktrees");
 
   return {
-    async prepare(task) {
+    async prepare(task, executionGroup = null) {
       const binding = task.codeProjectBinding;
       if (!binding || task.codeProjectMode === "none") {
         throw new ApiError(409, "CODE_PROJECT_REQUIRED", "请先为任务绑定代码项目");
@@ -63,6 +63,20 @@ export function createWorktreeManager({ dataDirectory }) {
           baseRef: task.managedWorktree.baseRef,
         };
       }
+      const sharedTask = executionGroup?.tasks.find((candidate) => (
+        candidate.id !== task.id
+        && candidate.codeProjectBinding?.workspacePath === binding.workspacePath
+        && candidate.managedWorktree
+        && candidate.developmentContext?.type === "worktree"
+      ));
+      if (sharedTask && await exists(sharedTask.developmentContext.path)) {
+        return {
+          path: sharedTask.developmentContext.path,
+          branch: sharedTask.developmentContext.branch,
+          repositoryPath: sharedTask.managedWorktree.repositoryPath,
+          baseRef: sharedTask.managedWorktree.baseRef,
+        };
+      }
       let repositoryPath;
       try {
         repositoryPath = (await git(binding.workspacePath, ["rev-parse", "--show-toplevel"])).stdout.trim();
@@ -70,8 +84,9 @@ export function createWorktreeManager({ dataDirectory }) {
         throw new ApiError(409, "CODE_PROJECT_NOT_GIT", `代码项目不是可用的 Git 仓库：${binding.workspacePath}`);
       }
       const repoName = slug(path.basename(repositoryPath), "repository");
-      const issueName = slug(task.externalKey ?? task.identifier ?? task.id, "task");
-      const title = slug(task.title, "work");
+      const anchor = executionGroup?.anchor ?? task;
+      const issueName = slug(anchor.externalKey ?? anchor.identifier ?? anchor.id, "task");
+      const title = slug(anchor.title, "work");
       const branch = `codex/${issueName}-${title}`.slice(0, 120);
       const worktreePath = path.join(worktreesDirectory, repoName, issueName);
       await mkdir(path.dirname(worktreePath), { recursive: true });

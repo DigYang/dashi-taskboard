@@ -398,6 +398,16 @@ export interface TaskRelations {
   related: TaskRelationSummary[];
 }
 
+export interface TaskExecutionGroup {
+  parentId: string;
+  parentIdentifier: string;
+  parentTitle: string;
+  position: number;
+  total: number;
+  ready: boolean;
+  waitingOn: TaskRelationSummary | null;
+}
+
 interface TaskConversationRefBase {
   source: "task" | "comment";
   sourceId: string;
@@ -456,6 +466,7 @@ export interface Task {
   locallyTracked?: boolean;
   archivedAt: string | null;
   relations: TaskRelations;
+  executionGroup?: TaskExecutionGroup | null;
   version: number;
   createdAt: string;
   updatedAt: string;

@@ -891,6 +891,7 @@ export function App() {
   const pendingAutomationRequestsRef = useRef(new Map<string, PendingAutomationRequest>());
   const pendingRemoteThreadClaimsRef = useRef(new Map<string, PendingRemoteThreadClaim>());
   const pendingLocalThreadStartsRef = useRef(new Map<string, PendingLocalThreadStart>());
+  const automaticExecutionGroupStartsRef = useRef(new Set<string>());
   const automationRequestInFlightRef = useRef<"list" | "save" | null>(null);
   const loadedAutomationProjectIdsRef = useRef(new Set<string>());
   const queuedAutomationSavesRef = useRef(new Map<string, QueuedProjectAutomationSave>());
@@ -2412,6 +2413,33 @@ export function App() {
     return () => window.clearInterval(timer);
   }, [hasRunningTask]);
 
+  useEffect(() => {
+    if (!embedded || window.parent === window || openingThreadTaskId || movingTaskId) return;
+    const candidate = [...tasks]
+      .filter((task) => (
+        (task.status === "backlog" || task.status === "todo")
+        && task.executionGroup?.ready === true
+        && !task.threadId
+        && !task.threadBinding
+        && !automaticExecutionGroupStartsRef.current.has(task.id)
+      ))
+      .sort((left, right) => left.createdAt.localeCompare(right.createdAt) || left.id.localeCompare(right.id))
+      .find((task) => {
+        const parentId = task.executionGroup?.parentId;
+        if (!parentId) return false;
+        const siblings = tasks.filter((candidate) => candidate.executionGroup?.parentId === parentId);
+        return siblings.some((candidate) => candidate.id !== task.id && candidate.managedWorktree)
+          && !siblings.some((candidate) => candidate.status === "in_progress");
+      });
+    if (!candidate) return;
+    automaticExecutionGroupStartsRef.current.add(candidate.id);
+    setAnnouncement(textRef.current(
+      `正在按创建顺序启动 ${candidate.externalKey ?? candidate.identifier} · ${candidate.title}`,
+      `Starting ${candidate.externalKey ?? candidate.identifier} · ${candidate.title} in creation order.`,
+    ));
+    void openTaskInThread(candidate);
+  }, [embedded, movingTaskId, openingThreadTaskId, tasks]);
+
 
   function selectBoardView(view: BoardView) {
     closeContextMenu();
@@ -2666,7 +2694,9 @@ export function App() {
         if (!released.released) {
           setAnnouncement(released.reason === "dirty"
             ? textRef.current("任务已完成；Worktree 有未提交改动，已保留。", "Task completed; its Worktree was kept because it has uncommitted changes.")
-            : textRef.current("任务已完成；分支尚未合入 main，Worktree 已保留。", "Task completed; its Worktree was kept because the branch is not merged into main."));
+            : released.reason === "group-active"
+              ? textRef.current("任务已完成；同一父议题还有子议题未完成，Worktree 已保留。", "Task completed; its Worktree was kept for unfinished sibling issues.")
+              : textRef.current("任务已完成；分支尚未合入 main，Worktree 已保留。", "Task completed; its Worktree was kept because the branch is not merged into main."));
         }
       }
       setTasks((current) => sortTasks(current.map((candidate) =>
