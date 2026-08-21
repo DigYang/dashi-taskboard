@@ -2452,6 +2452,25 @@ export function createTaskboardServer(options = {}) {
         return sendJson(response, 200, { task: await linear.getIssueDetail(issueId) });
       }
 
+      if (pathname === "/api/local/linear-image") {
+        if (request.method !== "GET") return methodNotAllowed(response, ["GET"]);
+        if ([...url.searchParams.keys()].some((key) => key !== "url") || url.searchParams.getAll("url").length !== 1) {
+          throw new ApiError(400, "INVALID_LINEAR_IMAGE_URL", "Linear 图片接口只接受一个 url 参数");
+        }
+        const imageUrl = url.searchParams.get("url");
+        if (!imageUrl || imageUrl.length > 4096) {
+          throw new ApiError(400, "INVALID_LINEAR_IMAGE_URL", "Linear 图片地址无效");
+        }
+        const image = await linear.getImage(imageUrl);
+        response.writeHead(200, {
+          "cache-control": "private, max-age=3600",
+          "content-length": image.body.length,
+          "content-type": image.contentType,
+        });
+        response.end(image.body);
+        return;
+      }
+
       const projectMappingRoute = pathname.match(/^\/api\/local\/project-mappings\/([^/]+)$/);
       if (projectMappingRoute) {
         if (request.method !== "PUT") return methodNotAllowed(response, ["PUT"]);

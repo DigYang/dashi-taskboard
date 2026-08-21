@@ -4,6 +4,14 @@ import { ApiError } from "./database.mjs";
 const LINEAR_GRAPHQL_URL = "https://api.linear.app/graphql";
 const SYNC_INTERVAL_MS = 60_000;
 const REQUEST_TIMEOUT_MS = 20_000;
+const LINEAR_IMAGE_BODY_LIMIT = 25 * 1024 * 1024;
+const LINEAR_IMAGE_CONTENT_TYPES = new Set([
+  "image/avif",
+  "image/gif",
+  "image/jpeg",
+  "image/png",
+  "image/webp",
+]);
 
 const METADATA_QUERY = `
   query TaskboardLinearMetadata {
@@ -358,6 +366,73 @@ export function createLinearIntegration({ configStore, database, fetch: fetchImp
     return payload?.data;
   }
 
+  async function fetchImage(config, value) {
+    let url;
+    try {
+      url = new URL(value);
+    } catch {
+      throw new ApiError(400, "INVALID_LINEAR_IMAGE_URL", "Linear 图片地址无效");
+    }
+    const organizationPath = url.pathname.split("/").filter(Boolean)[0]?.toLowerCase();
+    if (
+      url.protocol !== "https:"
+      || url.hostname !== "uploads.linear.app"
+      || url.port !== ""
+      || url.username !== ""
+      || url.password !== ""
+      || organizationPath !== config.organizationId.toLowerCase()
+    ) {
+      throw new ApiError(400, "INVALID_LINEAR_IMAGE_URL", "仅支持当前 Linear 工作区的图片地址");
+    }
+
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+    timeout.unref?.();
+    let response;
+    try {
+      response = await fetchImplementation(url, {
+        redirect: "manual",
+        signal: controller.signal,
+        headers: {
+          accept: "image/avif,image/webp,image/png,image/jpeg,image/gif",
+          authorization: config.apiKey,
+        },
+      });
+    } catch (error) {
+      const timedOut = error instanceof Error && error.name === "AbortError";
+      throw new ApiError(
+        502,
+        timedOut ? "LINEAR_IMAGE_TIMEOUT" : "LINEAR_IMAGE_UNAVAILABLE",
+        timedOut ? "加载 Linear 图片超时" : "无法加载 Linear 图片",
+      );
+    } finally {
+      clearTimeout(timeout);
+    }
+    if (response.status === 401 || response.status === 403) {
+      throw new ApiError(401, "LINEAR_AUTH_FAILED", "Linear API Key 无效或缺少图片访问权限");
+    }
+    if (!response.ok) {
+      throw new ApiError(
+        response.status === 404 ? 404 : 502,
+        response.status === 404 ? "LINEAR_IMAGE_NOT_FOUND" : "LINEAR_IMAGE_REQUEST_FAILED",
+        response.status === 404 ? "Linear 图片不存在" : `Linear 图片请求失败（HTTP ${response.status}）`,
+      );
+    }
+    const contentType = response.headers.get("content-type")?.split(";", 1)[0]?.trim().toLowerCase();
+    if (!contentType || !LINEAR_IMAGE_CONTENT_TYPES.has(contentType)) {
+      throw new ApiError(502, "INVALID_LINEAR_IMAGE", "Linear 返回了不支持的图片格式");
+    }
+    const declaredLength = Number(response.headers.get("content-length") ?? 0);
+    if (Number.isFinite(declaredLength) && declaredLength > LINEAR_IMAGE_BODY_LIMIT) {
+      throw new ApiError(413, "LINEAR_IMAGE_TOO_LARGE", "Linear 图片不能超过 25 MB");
+    }
+    const body = Buffer.from(await response.arrayBuffer());
+    if (body.length > LINEAR_IMAGE_BODY_LIMIT) {
+      throw new ApiError(413, "LINEAR_IMAGE_TOO_LARGE", "Linear 图片不能超过 25 MB");
+    }
+    return { body, contentType };
+  }
+
   async function fetchMetadata(config) {
     const data = await request(config, METADATA_QUERY);
     if (!data?.organization?.id || !data?.viewer?.id) {
@@ -558,6 +633,11 @@ export function createLinearIntegration({ configStore, database, fetch: fetchImp
         return localChild ? relationSummaryFromTask(localChild) : child;
       });
       return detail;
+    },
+    async getImage(url) {
+      const config = await configStore.read();
+      if (!config) throw new ApiError(409, "LINEAR_NOT_CONFIGURED", "Linear 尚未配置");
+      return fetchImage(config, url);
     },
     async createTask(input) {
       const config = await configStore.read();

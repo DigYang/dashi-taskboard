@@ -834,3 +834,16 @@ export function resolvePersistedAttachmentUrl(value: string): string {
   }
   return value;
 }
+
+export function resolveLinearImageUrl(value?: string): string | undefined {
+  if (!value) return value;
+  try {
+    const url = new URL(value);
+    if (url.protocol === "https:" && url.hostname === "uploads.linear.app") {
+      return resolveTaskboardUrl(`/api/local/linear-image?url=${encodeURIComponent(url.href)}`);
+    }
+  } catch {
+    return value;
+  }
+  return value;
+}
