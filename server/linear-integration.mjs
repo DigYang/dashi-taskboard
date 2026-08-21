@@ -565,7 +565,10 @@ export function createLinearIntegration({ configStore, database, fetch: fetchImp
 
   function resolveState(teamId, targetStatus) {
     const matches = workflowStates.filter((state) => (
-      state?.team?.id === teamId && taskStatusFromLinear(state) === targetStatus
+      state?.team?.id === teamId
+      && (targetStatus === "in_progress"
+        ? state?.name === "In Progress"
+        : taskStatusFromLinear(state) === targetStatus)
     ));
     if (matches.length === 0) {
       throw new ApiError(409, "LINEAR_STATE_UNAVAILABLE", "Linear 当前工作流没有对应的目标状态");
