@@ -111,6 +111,7 @@ interface TaskEditorProps {
   initialDraft: NewTaskEditorDraft | null;
   labels: string[];
   codexProjects?: Array<{ id: string; name: string; workspacePath?: string }>;
+  showCodeProjectPicker?: boolean;
   currentUser: ActorIdentity;
   availableAssignees?: ActorIdentity[];
   developmentScan: DevelopmentScan;
@@ -173,6 +174,7 @@ export function TaskEditor({
   initialDraft,
   labels: availableLabels,
   codexProjects = [],
+  showCodeProjectPicker = false,
   currentUser,
   availableAssignees,
   developmentScan,
@@ -651,7 +653,7 @@ export function TaskEditor({
               onOpenChange={(open) => setMenu(open ? "priority" : null)}
               onChange={setPriority}
             />
-            {!task && codexProjects.some((project) => project.workspacePath) && (
+            {!task && showCodeProjectPicker && (
               <TaskPropertyPicker
                 value={selectedCodexProjectId}
                 options={[

@@ -750,6 +750,9 @@ export function App() {
   const [embeddedFrameChallenge, setEmbeddedFrameChallengeState] = useState("");
   const [developmentScan, setDevelopmentScan] = useState<DevelopmentScan>({ workspacePath: null, contexts: [] });
   const [developmentScanLoading, setDevelopmentScanLoading] = useState(false);
+  const [resolvedLocalCodeProjects, setResolvedLocalCodeProjects] = useState<
+    Array<{ id: string; name: string; workspacePath: string }>
+  >([]);
   const [manageTaskboardSkillPath, setManageTaskboardSkillPath] = useState("");
   const [taskboardMetadata, setTaskboardMetadata] = useState<TaskboardMetadata | null>(null);
   const [localAiChatAvailable, setLocalAiChatAvailable] = useState(false);
@@ -924,6 +927,19 @@ export function App() {
   const isJiraProject = selectedProject?.source === "jira";
   const isLinearProject = selectedProject?.source === "linear";
   const isExternalProject = isJiraProject || isLinearProject;
+  const codeProjects = useMemo(() => {
+    const candidates = [
+      ...(hostContext?.projects ?? []).filter((project) => project.workspacePath),
+      ...resolvedLocalCodeProjects,
+    ];
+    const seenPaths = new Set<string>();
+    return candidates.filter((project) => {
+      const workspacePath = project.workspacePath;
+      if (!workspacePath || seenPaths.has(workspacePath)) return false;
+      seenPaths.add(workspacePath);
+      return true;
+    });
+  }, [hostContext?.projects, resolvedLocalCodeProjects]);
   const aiImportProjectId = hasLoadedTasks
     && tasks.length === 0
     && selectedProject
@@ -2088,6 +2104,54 @@ export function App() {
     rememberDeviceWorkspacePath,
     selectedProjectId,
     selectedDeviceWorkspacePath,
+  ]);
+
+  useEffect(() => {
+    if (!isLinearProject) {
+      setResolvedLocalCodeProjects([]);
+      return;
+    }
+    const controller = new AbortController();
+    const localProjects = projects.filter((project) => (
+      project.source === "local" && project.id !== GLOBAL_PROJECT_ID
+    ));
+    void Promise.all(localProjects.map(async (project) => {
+      const knownWorkspacePath = hostContext?.projects?.find((candidate) => candidate.id === project.id)?.workspacePath
+        ?? deviceWorkspacePaths[project.id]
+        ?? project.workspacePath
+        ?? projectCodexIdentities[project.id]?.workspacePath;
+      if (knownWorkspacePath) {
+        return { id: project.id, name: project.name, workspacePath: knownWorkspacePath };
+      }
+      try {
+        const scan = await listDevelopmentContexts(
+          project.id,
+          project.id,
+          undefined,
+          controller.signal,
+        );
+        if (!scan.workspacePath) return null;
+        rememberDeviceWorkspacePath(project.id, scan.workspacePath);
+        return { id: project.id, name: project.name, workspacePath: scan.workspacePath };
+      } catch (error) {
+        if ((error as Error).name === "AbortError") throw error;
+        return null;
+      }
+    })).then((candidates) => {
+      if (!controller.signal.aborted) {
+        setResolvedLocalCodeProjects(candidates.filter((candidate) => candidate !== null));
+      }
+    }).catch((error) => {
+      if ((error as Error).name !== "AbortError") setResolvedLocalCodeProjects([]);
+    });
+    return () => controller.abort();
+  }, [
+    deviceWorkspacePaths,
+    hostContext?.projects,
+    isLinearProject,
+    projectCodexIdentities,
+    projects,
+    rememberDeviceWorkspacePath,
   ]);
 
   useEffect(() => {
@@ -3932,7 +3996,7 @@ export function App() {
             referenceTasks={referenceTasks.filter((task) => task.projectId === detailTask.projectId)}
             currentUser={editorCurrentUser}
             availableAssignees={detailTask.source === "linear" ? linearConnection?.members : undefined}
-            availableCodeProjects={detailTask.source === "linear" ? hostContext?.projects : undefined}
+            availableCodeProjects={detailTask.source === "linear" ? codeProjects : undefined}
             availableLabels={availableLabels}
             developmentScan={developmentScan}
             developmentScanLoading={developmentScanLoading}
@@ -4382,7 +4446,8 @@ export function App() {
             ? null
             : newTaskDraft.draft}
           labels={projects.find((project) => project.id === editorProjectId)?.labels ?? []}
-          codexProjects={isLinearProject ? hostContext?.projects : undefined}
+          codexProjects={isLinearProject ? codeProjects : undefined}
+          showCodeProjectPicker={isLinearProject}
           currentUser={editorCurrentUser}
           availableAssignees={isLinearProject ? linearConnection?.members : undefined}
           developmentScan={developmentScan}
