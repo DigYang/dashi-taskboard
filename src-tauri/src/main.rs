@@ -1256,7 +1256,18 @@ fn restart_launcher(
 
 fn open_taskboard(state: &LauncherState) -> Result<(), String> {
     state.snapshot.lock().unwrap().open_request_pending = true;
-    signal_pending_taskboard_open(state)
+    signal_pending_taskboard_open(state)?;
+    #[cfg(target_os = "macos")]
+    if let Some(app_path) = state.snapshot.lock().unwrap().app_path.clone() {
+        let status = StdCommand::new("/usr/bin/open")
+            .arg(app_path)
+            .status()
+            .map_err(|error| error.to_string())?;
+        if !status.success() {
+            return Err("Codex 窗口没有成功切到前台".to_string());
+        }
+    }
+    Ok(())
 }
 
 fn open_taskboard_in_browser(state: &LauncherState) -> Result<(), String> {
