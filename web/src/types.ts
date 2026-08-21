@@ -425,6 +425,8 @@ export interface Task {
   externalId?: string | null;
   externalKey?: string | null;
   externalUrl: string | null;
+  externalOnly?: boolean;
+  locallyTracked?: boolean;
   archivedAt: string | null;
   relations: TaskRelations;
   version: number;

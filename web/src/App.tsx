@@ -1514,7 +1514,7 @@ export function App() {
   }
 
   function openTaskDetail(task: TaskRelationSummary) {
-    if (!task.externalOnly) {
+    if (!task.externalOnly && (!("source" in task) || task.source !== "linear")) {
       setExternalDetailTask(null);
       showTaskDetail(task);
       return;
@@ -3932,6 +3932,7 @@ export function App() {
             referenceTasks={referenceTasks.filter((task) => task.projectId === detailTask.projectId)}
             currentUser={editorCurrentUser}
             availableAssignees={detailTask.source === "linear" ? linearConnection?.members : undefined}
+            availableCodeProjects={detailTask.source === "linear" ? hostContext?.projects : undefined}
             availableLabels={availableLabels}
             developmentScan={developmentScan}
             developmentScanLoading={developmentScanLoading}
