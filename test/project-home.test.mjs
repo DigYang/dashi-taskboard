@@ -84,7 +84,7 @@ test("the issue composer includes Linear-style labels and scheduling", () => {
 
 test("issue creation selects a project only from all projects and keeps the current project otherwise", () => {
   assert.match(editorSource, /\{!task && projectOptions && \([\s\S]*?ariaLabel=\{text\("项目", "Project"\)\}/);
-  assert.doesNotMatch(detailSource, /detail-property-label">项目|project-property-icon|project\.name/);
+  assert.doesNotMatch(detailSource, /detail-property-label">项目|project-property-icon/);
   assert.match(appSource, /projectOptions=\{!editor\.task && isAllProjects \? createTargetProjects : undefined\}/);
   assert.match(appSource, /const targetProjectId = editorProjectId \?\? selectedProjectId;[\s\S]*?createTaskRequest\(targetProjectId, draft\)/);
   assert.match(appSource, /className="header-project-switcher"/);

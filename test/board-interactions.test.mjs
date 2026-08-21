@@ -78,6 +78,7 @@ test("the complete issue status set shares one ordered source", () => {
     "todo",
     "in_progress",
     "in_review",
+    "in_test",
     "blocked",
     "done",
     "canceled",
@@ -86,6 +87,7 @@ test("the complete issue status set shares one ordered source", () => {
   assert.match(boardColumnSource, /todo: \{ label: "等待认领", tone: "todo" \}/);
   assert.match(boardColumnSource, /in_progress: \{ label: "处理中", tone: "progress" \}/);
   assert.match(boardColumnSource, /in_review: \{ label: "等你确认", tone: "review" \}/);
+  assert.match(boardColumnSource, /in_test: \{ label: "测试中", tone: "test" \}/);
   assert.match(boardColumnSource, /blocked: \{ label: "遇到阻碍", tone: "blocked" \}/);
   assert.match(boardColumnSource, /done: \{ label: "完成", tone: "done" \}/);
   assert.match(boardColumnSource, /canceled: \{ label: "取消", tone: "canceled" \}/);

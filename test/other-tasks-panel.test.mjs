@@ -5,6 +5,7 @@ import { test } from "node:test";
 const appSource = await readFile(new URL("../web/src/App.tsx", import.meta.url), "utf8");
 const statusSource = await readFile(new URL("../web/src/issueBoardStatuses.ts", import.meta.url), "utf8");
 const boardColumnSource = await readFile(new URL("../web/src/components/BoardColumn.tsx", import.meta.url), "utf8");
+const boardDisplaySource = await readFile(new URL("../web/src/components/BoardCardDisplayMenu.tsx", import.meta.url), "utf8");
 const panelSource = await readFile(new URL("../web/src/components/OtherTasksPanel.tsx", import.meta.url), "utf8");
 const styles = await readFile(new URL("../web/src/styles.css", import.meta.url), "utf8");
 
@@ -23,17 +24,19 @@ function cssBlock(selector) {
   return styles.slice(start, end + 2);
 }
 
-test("the issue workspace projects the seven statuses into adaptive main and secondary groups", () => {
-  assert.deepEqual(statusList("MAIN_STATUSES"), ["todo", "in_progress", "blocked", "in_review"]);
-  assert.deepEqual(statusList("SECONDARY_STATUSES"), ["backlog", "done", "canceled"]);
+test("the issue workspace projects all statuses into adaptive main and secondary groups", () => {
+  assert.deepEqual(statusList("MAIN_STATUSES"), ["todo", "in_progress", "blocked", "in_review", "in_test", "done"]);
+  assert.deepEqual(statusList("SECONDARY_STATUSES"), ["backlog", "canceled"]);
   assert.match(statusSource, /satisfies readonly TaskStatus\[\]/);
-  assert.match(appSource, /const mainStatuses = hasBlockedTasks[\s\S]*?MAIN_STATUSES\.filter\(\(status\) => status !== "blocked"\)/);
+  assert.match(appSource, /const defaultMainStatuses = hasBlockedTasks[\s\S]*?MAIN_STATUSES\.filter\(\(status\) => status !== "blocked"\)/);
   assert.match(appSource, /mainStatuses\.map\(\(status\) => \([\s\S]*?<BoardColumn/);
   assert.match(appSource, /mainStatuses\.map\(\(status\) => \([\s\S]*?className="loading-column"/);
   assert.match(boardColumnSource, /todo: \{ label: "等待认领", tone: "todo" \}/);
   assert.match(boardColumnSource, /in_progress: \{ label: "处理中", tone: "progress" \}/);
   assert.match(boardColumnSource, /blocked: \{ label: "遇到阻碍", tone: "blocked" \}/);
   assert.match(boardColumnSource, /in_review: \{ label: "等你确认", tone: "review" \}/);
+  assert.match(boardColumnSource, /in_test: \{ label: "测试中", tone: "test" \}/);
+  assert.match(boardColumnSource, /done: \{ label: "完成", tone: "done" \}/);
 });
 
 test("other tasks is a closed-by-default non-modal panel with archived issues", () => {
@@ -101,8 +104,13 @@ test("global creation defaults to todo while per-column creation keeps the chose
   assert.match(appSource, /onCreate=\{\(initialStatus\) => setEditor\(\{ task: null, status: initialStatus \}\)\}/);
 });
 
-test("legacy empty-column and manual visibility runtime paths are removed", async () => {
-  assert.doesNotMatch(appSource, /showEmptyColumns|visibleStatuses|hiddenStatuses|columnVisibility|SHOW_EMPTY_COLUMNS_KEY|COLUMN_VISIBILITY_KEY/);
+test("column visibility is stored per project in the board display menu", async () => {
+  assert.match(appSource, /const BOARD_COLUMN_VISIBILITY_KEY = "taskboard\.board-column-visibility\.v1"/);
+  assert.match(appSource, /const mainStatuses = boardColumnVisibility\[selectedProjectId\] \?\? defaultMainStatuses/);
+  assert.match(appSource, /function toggleBoardStatus\(status: TaskStatus\)/);
+  assert.match(appSource, /taskboardStorage\.setItem\(BOARD_COLUMN_VISIBILITY_KEY, JSON\.stringify\(next\)\)/);
+  assert.match(boardDisplaySource, /statuses\.map\(\(status\) =>/);
+  assert.match(boardDisplaySource, /onClick=\{\(\) => onToggleStatus\(status\)\}/);
   assert.doesNotMatch(boardColumnSource, /ColumnVisibilityMenu|onHide|隐藏列/);
   assert.doesNotMatch(styles, /\.hidden-columns|\.hidden-column-|\.column-visibility-|\.column-menu|\.board-settings-trigger|\.board-settings-menu|\.board-filter-empty/);
   assert.match(styles, /\.board-setting-switch \{/);

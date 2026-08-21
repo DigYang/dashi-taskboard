@@ -41,16 +41,17 @@ test("the app restores issue detail from the URL and follows browser history", (
     appSource,
     /useState<string \| null>\(\s*\(\) => readIssueIdentifier\(window\.location\.search\),?\s*\)/,
   );
-  assert.match(appSource, /task\.identifier === detailTaskIdentifier/);
+  assert.match(appSource, /externalDetailTask\?\.identifier\.toLowerCase\(\) === detailTaskIdentifier\.toLowerCase\(\)/);
+  assert.match(appSource, /task\.identifier\.toLowerCase\(\) === detailTaskIdentifier\.toLowerCase\(\)/);
   assert.match(appSource, /window\.addEventListener\("popstate", syncRouteFromLocation\)/);
   assert.match(appSource, /window\.removeEventListener\("popstate", syncRouteFromLocation\)/);
-  const openTaskSource = appSource.slice(
+  const showTaskSource = appSource.slice(
+    appSource.indexOf("function showTaskDetail"),
     appSource.indexOf("function openTaskDetail"),
-    appSource.indexOf("function closeTaskDetail"),
   );
-  assert.match(openTaskSource, /buildIssueUrl\(window\.location\.href, selectedProjectId, null\)/);
-  assert.match(openTaskSource, /window\.history\.replaceState/);
-  assert.match(openTaskSource, /window\.history\.pushState/);
+  assert.match(showTaskSource, /buildIssueUrl\(window\.location\.href, selectedProjectId, null\)/);
+  assert.match(showTaskSource, /window\.history\.replaceState/);
+  assert.match(showTaskSource, /window\.history\.pushState/);
   assert.match(appSource, /function closeTaskDetail\(\)[\s\S]*?window\.history\.replaceState/);
   assert.match(appSource, /onEdit=\{openTaskDetail\}/);
 });
