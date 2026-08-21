@@ -8638,6 +8638,35 @@ kbd {
   min-height: 20px;
 }
 
+.task-card-start {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 24px;
+  width: 24px;
+  height: 24px;
+  margin: -4px 0 -4px 8px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: var(--accent-soft);
+  cursor: pointer;
+  pointer-events: auto;
+}
+
+.task-card-start:hover {
+  background: var(--accent);
+}
+
+.task-card-start .taskboard-icon {
+  width: 14px;
+  height: 14px;
+}
+
+.task-card-start:hover .taskboard-icon {
+  filter: brightness(0) invert(1);
+}
+
 .task-card-complete {
   display: none;
   align-items: center;

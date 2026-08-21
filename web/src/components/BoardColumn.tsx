@@ -43,6 +43,7 @@ interface BoardColumnProps {
   onCreate: (status: TaskStatus) => void;
   onEdit: (task: Task) => void;
   onUpdate: (task: Task, changes: Partial<TaskDraft>) => Promise<Task>;
+  onStart: (task: Task) => void;
   onComplete: (task: Task) => void;
   onContextMenu: (task: Task, position: { x: number; y: number }) => void;
   onDragStart: (task: Task, height: number) => void;
@@ -75,6 +76,7 @@ export function BoardColumn({
   onCreate,
   onEdit,
   onUpdate,
+  onStart,
   onComplete,
   onContextMenu,
   onDragStart,
@@ -196,6 +198,7 @@ export function BoardColumn({
                 : (label) => onCreateLabel(label, task.projectId)}
               onEdit={onEdit}
               onUpdate={onUpdate}
+              onStart={onStart}
               onComplete={onComplete}
               onContextMenu={onContextMenu}
               onDragStart={onDragStart}

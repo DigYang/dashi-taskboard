@@ -45,6 +45,7 @@ interface TaskCardProps {
   onCreateLabel?: (label: string) => Promise<void>;
   onEdit: (task: Task) => void;
   onUpdate: (task: Task, changes: Partial<TaskDraft>) => Promise<Task>;
+  onStart?: (task: Task) => void;
   onComplete?: (task: Task) => void;
   onContextMenu: (task: Task, position: { x: number; y: number }) => void;
   onDragStart: (task: Task, height: number) => void;
@@ -445,6 +446,7 @@ export function TaskCard({
   onCreateLabel,
   onEdit,
   onUpdate,
+  onStart,
   onComplete,
   onContextMenu,
   onDragStart,
@@ -523,6 +525,20 @@ export function TaskCard({
           <span className="task-identifier">ID: {displayIdentifier}</span>
         </span>
         {presentation.unread && <span className="task-unread-dot" aria-label={text("有未读更新", "Unread updates")} />}
+        {(task.status === "backlog" || task.status === "todo") && onStart && (
+          <button
+            className="task-card-start"
+            type="button"
+            aria-label={text(`开始执行 ${displayIdentifier}`, `Start ${displayIdentifier}`)}
+            title={text("开始执行", "Start")}
+            onClick={(event) => {
+              event.stopPropagation();
+              onStart(task);
+            }}
+          >
+            <TaskboardIcon name="automationPlay" />
+          </button>
+        )}
         {(task.status === "in_review" || task.status === "in_test") && onComplete && (
           <button
             className="task-card-complete"

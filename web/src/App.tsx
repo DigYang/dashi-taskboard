@@ -224,6 +224,12 @@ interface PendingRemoteThreadClaim {
   identity: CodexProjectIdentity;
 }
 
+interface PendingLocalThreadStart {
+  claimedTask: Task;
+  previousTask: Task;
+  identity: CodexProjectIdentity | null;
+}
+
 type ProjectAutomationStatus = "ACTIVE" | "PAUSED";
 type AutomationQuotaState = "available" | "blocked" | "unknown" | "unavailable";
 type AutomationIntervalMinutes = 5 | 10 | 15 | 30 | 60;
@@ -880,6 +886,7 @@ export function App() {
   }
   const pendingAutomationRequestsRef = useRef(new Map<string, PendingAutomationRequest>());
   const pendingRemoteThreadClaimsRef = useRef(new Map<string, PendingRemoteThreadClaim>());
+  const pendingLocalThreadStartsRef = useRef(new Map<string, PendingLocalThreadStart>());
   const automationRequestInFlightRef = useRef<"list" | "save" | null>(null);
   const loadedAutomationProjectIdsRef = useRef(new Set<string>());
   const queuedAutomationSavesRef = useRef(new Map<string, QueuedProjectAutomationSave>());
@@ -1750,6 +1757,8 @@ export function App() {
         const payload = message.payload as { taskId?: unknown; threadId?: unknown };
         if (typeof payload.taskId === "string" && pendingRemoteThreadClaimsRef.current.has(payload.taskId)) {
           void bindPreparedRemoteThread(payload.taskId, payload.threadId);
+        } else if (typeof payload.taskId === "string" && pendingLocalThreadStartsRef.current.has(payload.taskId)) {
+          void bindPreparedLocalThread(payload.taskId, payload.threadId);
         } else {
           setOpeningThreadTaskId(null);
         }
@@ -1765,6 +1774,13 @@ export function App() {
         };
         if (typeof payload.taskId === "string" && pendingRemoteThreadClaimsRef.current.has(payload.taskId)) {
           void compensateFailedRemoteThread(
+            payload.taskId,
+            payload.error,
+            payload.threadId,
+            payload.uncertain === true,
+          );
+        } else if (typeof payload.taskId === "string" && pendingLocalThreadStartsRef.current.has(payload.taskId)) {
+          void compensateFailedLocalThreadStart(
             payload.taskId,
             payload.error,
             payload.threadId,
@@ -3171,6 +3187,74 @@ export function App() {
     setActionError(error);
   }
 
+  async function compensateFailedLocalThreadStart(
+    taskId: string,
+    rawError: unknown,
+    rawThreadId?: unknown,
+    uncertain = false,
+  ) {
+    const pending = pendingLocalThreadStartsRef.current.get(taskId);
+    if (!pending) return;
+    pendingLocalThreadStartsRef.current.delete(taskId);
+    const error = typeof rawError === "string"
+      ? rawError
+      : textRef.current("无法创建 Codex 对话。", "Could not create the Codex conversation.");
+    const threadId = typeof rawThreadId === "string" ? rawThreadId.trim() : "";
+    const status: TaskStatus = threadId || uncertain ? "blocked" : pending.previousTask.status;
+    const binding = threadId && pending.identity ? { threadId, ...pending.identity } : null;
+    try {
+      const compensated = await moveTaskRequest(
+        pending.claimedTask,
+        status,
+        pending.previousTask.sortOrder,
+        binding,
+        threadId && !pending.identity ? threadId : undefined,
+      );
+      updateTaskFromRemoteThread(compensated);
+    } catch (moveError) {
+      if (!(moveError instanceof ApiError && moveError.code === "VERSION_CONFLICT")) {
+        setActionError(errorMessage(moveError));
+      }
+    } finally {
+      setOpeningThreadTaskId(null);
+    }
+    setActionError(error);
+  }
+
+  async function bindPreparedLocalThread(taskId: string, rawThreadId: unknown) {
+    const pending = pendingLocalThreadStartsRef.current.get(taskId);
+    if (!pending) return;
+    const threadId = typeof rawThreadId === "string" ? rawThreadId.trim() : "";
+    if (!threadId) {
+      await compensateFailedLocalThreadStart(taskId, textRef.current(
+        "Codex 没有返回新对话 ID。",
+        "Codex did not return the new conversation ID.",
+      ));
+      return;
+    }
+    try {
+      const binding = pending.identity ? { threadId, ...pending.identity } : undefined;
+      const boundTask = await moveTaskRequest(
+        pending.claimedTask,
+        "in_progress",
+        pending.claimedTask.sortOrder,
+        binding,
+        pending.identity ? undefined : threadId,
+      );
+      pendingLocalThreadStartsRef.current.delete(taskId);
+      updateTaskFromRemoteThread(boundTask);
+      setOpeningThreadTaskId(null);
+      setAnnouncement(textRef.current(
+        `${boundTask.identifier} 已开始执行。`,
+        `${boundTask.identifier} has started.`,
+      ));
+    } catch (error) {
+      pendingLocalThreadStartsRef.current.delete(taskId);
+      setOpeningThreadTaskId(null);
+      setActionError(errorMessage(error));
+    }
+  }
+
   async function openRemoteTaskInThread(task: Task, baseIdentity: CodexProjectIdentity) {
     try {
       const [latestTask, comments] = await Promise.all([getTask(task.id), listComments(task.id)]);
@@ -3179,7 +3263,11 @@ export function App() {
         openThread(latestTask.threadBinding);
         return;
       }
-      if (latestTask.status !== "todo" || latestTask.archivedAt !== null || latestTask.threadId) {
+      if (
+        (latestTask.status !== "backlog" && latestTask.status !== "todo")
+        || latestTask.archivedAt !== null
+        || latestTask.threadId
+      ) {
         throw new Error(textRef.current(
           "该议题已被其他控制器认领或绑定，请刷新后重试。",
           "This issue was claimed or bound by another controller. Refresh and try again.",
@@ -3318,13 +3406,47 @@ export function App() {
       });
       return;
     }
+    let taskToOpen = task;
+    if (task.status === "backlog" || task.status === "todo") {
+      try {
+        const latestTask = await getTask(task.id);
+        if (
+          (latestTask.status !== "backlog" && latestTask.status !== "todo")
+          || latestTask.archivedAt !== null
+          || latestTask.threadId
+          || latestTask.threadBinding
+        ) {
+          throw new Error(textRef.current(
+            "该议题已在其他位置开始或更新，请刷新后重试。",
+            "This issue was started or changed elsewhere. Refresh and try again.",
+          ));
+        }
+        taskToOpen = await moveTaskRequest(latestTask, "in_progress", undefined, null);
+        pendingLocalThreadStartsRef.current.set(task.id, {
+          claimedTask: taskToOpen,
+          previousTask: latestTask,
+          identity: codexProjectContext ?? null,
+        });
+        updateTaskFromRemoteThread(taskToOpen);
+      } catch (error) {
+        setOpeningThreadTaskId(null);
+        setActionError(error instanceof ApiError && error.code === "VERSION_CONFLICT"
+          ? textRef.current(
+            "该议题已在其他位置更新，未创建重复对话。",
+            "This issue changed elsewhere. No duplicate conversation was created.",
+          )
+          : errorMessage(error));
+        if (selectedProjectId) void refreshTasks(selectedProjectId, { quiet: true });
+        return;
+      }
+    }
     postEmbeddedHostMessage({
       type: "taskboard:create-thread",
       payload: {
-        taskId: task.id,
-        identifier: task.identifier,
-        title: task.title,
-        description: task.description,
+        taskId: taskToOpen.id,
+        identifier: taskToOpen.identifier,
+        title: taskToOpen.title,
+        description: taskToOpen.description,
         canonicalReferences,
         instruction: embeddedInstruction,
         projectName: taskboardProject?.name,
@@ -4152,6 +4274,7 @@ export function App() {
                         onCreate={(initialStatus) => setEditor({ task: null, status: initialStatus })}
                         onEdit={openTaskDetail}
                         onUpdate={updateTaskProperties}
+                        onStart={openTaskInThread}
                         onComplete={(task) => void moveTask(task, "done")}
                         onContextMenu={(task, position) => setContextMenu({ taskId: task.id, ...position })}
                         onDragStart={startTaskDrag}
@@ -4194,6 +4317,7 @@ export function App() {
                     onDelete={setPendingArchivedTaskDelete}
                     onEdit={openTaskDetail}
                     onUpdate={updateTaskProperties}
+                    onStart={openTaskInThread}
                     onContextMenu={(task, position) => setContextMenu({ taskId: task.id, ...position })}
                     onDragStart={startTaskDrag}
                     onDragEnd={endTaskDrag}
