@@ -177,6 +177,15 @@ function actorFromLinear(user, fallback) {
   };
 }
 
+function routeCodeProject(issue, routes = []) {
+  const match = routes.find((route) => (
+    (route.matchType === "project" && route.matchId === issue?.project?.id)
+    || (route.matchType === "team" && route.matchId === issue?.team?.id)
+    || (route.matchType === "label" && issue?.labels?.nodes?.some((label) => label?.id === route.matchId))
+  )) ?? routes.find((route) => route.matchType === "default") ?? null;
+  return match?.target ?? null;
+}
+
 function normalizeIssue(issue, config, index = 0) {
   const externalId = String(issue.id);
   const externalKey = limitedString(issue.identifier, "LINEAR", 128);
@@ -224,6 +233,18 @@ function normalizeIssue(issue, config, index = 0) {
     externalId,
     externalKey,
     externalUrl: typeof issue.url === "string" ? issue.url : null,
+    externalProject: issue?.project?.id
+      ? { id: String(issue.project.id), name: limitedString(issue.project.name, "Linear project", 240) }
+      : null,
+    externalTeam: issue?.team?.id
+      ? {
+          id: String(issue.team.id),
+          key: limitedString(issue.team.key, "", 64),
+          name: limitedString(issue.team.name, issue.team.key, 240),
+        }
+      : null,
+    codeProjectMode: "auto",
+    codeProjectBinding: routeCodeProject(issue, config.routes),
     parent,
     createdAt: typeof issue.createdAt === "string" ? issue.createdAt : new Date().toISOString(),
     updatedAt: typeof issue.updatedAt === "string" ? issue.updatedAt : new Date().toISOString(),
@@ -298,7 +319,7 @@ function normalizeIssueDetail(issue, config) {
   };
 }
 
-function safeConfig(config, lastSyncedAt = null, members = []) {
+function safeConfig(config, lastSyncedAt = null, members = [], catalog = {}) {
   return config
     ? {
       configured: true,
@@ -307,6 +328,10 @@ function safeConfig(config, lastSyncedAt = null, members = []) {
       teams: config.teams,
       projects: config.projects,
       members,
+      availableProjects: catalog.projects ?? [],
+      availableTeams: catalog.teams ?? [],
+      availableLabels: catalog.labels ?? [],
+      routes: config.routes ?? [],
       projectId: LINEAR_PROJECT_ID,
       lastSyncedAt,
     }
@@ -317,6 +342,10 @@ function safeConfig(config, lastSyncedAt = null, members = []) {
       teams: [],
       projects: [],
       members: [],
+      availableProjects: [],
+      availableTeams: [],
+      availableLabels: [],
+      routes: [],
       projectId: LINEAR_PROJECT_ID,
       lastSyncedAt: null,
     };
@@ -341,6 +370,7 @@ export function createLinearIntegration({ configStore, database, fetch: fetchImp
   let workflowStates = [];
   let labelCatalog = [];
   let memberCatalog = [];
+  let metadataCatalog = { projects: [], teams: [] };
   const issueTeams = new Map();
 
   async function request(config, query, variables = {}) {
@@ -468,6 +498,11 @@ export function createLinearIntegration({ configStore, database, fetch: fetchImp
     workflowStates = Array.isArray(data?.workflowStates?.nodes) ? data.workflowStates.nodes : [];
     labelCatalog = Array.isArray(data?.issueLabels?.nodes) ? data.issueLabels.nodes : [];
     const teams = Array.isArray(data?.teams?.nodes) ? data.teams.nodes : [];
+    metadataCatalog = {
+      teams: teams.map((team) => ({ id: String(team.id), key: team.key, name: team.name })),
+      projects: (Array.isArray(data?.projects?.nodes) ? data.projects.nodes : [])
+        .map((project) => ({ id: String(project.id), name: project.name })),
+    };
     const teamIds = resolveFilterIds(config.teams, teams, ["id", "key", "name"], "Team");
     const memberResults = await Promise.all(teamIds.map((id) => request(config, TEAM_MEMBERS_QUERY, { id })));
     memberCatalog = memberResults
@@ -538,14 +573,24 @@ export function createLinearIntegration({ configStore, database, fetch: fetchImp
       },
     );
     lastSyncedAt = syncStartedAt;
-    return safeConfig(config, lastSyncedAt, memberCatalog.map((member) => actorFromLinear(member, "Linear user")));
+    return safeConfig(
+      config,
+      lastSyncedAt,
+      memberCatalog.map((member) => actorFromLinear(member, "Linear user")),
+      { ...metadataCatalog, labels: labelCatalog.map((label) => ({ id: String(label.id), name: label.name })) },
+    );
   }
 
   async function sync({ force = false } = {}) {
     const config = await configStore.read();
     if (!config) return safeConfig(null);
     if (!force && lastSyncedAt && Date.now() - new Date(lastSyncedAt).getTime() < SYNC_INTERVAL_MS) {
-      return safeConfig(config, lastSyncedAt, memberCatalog.map((member) => actorFromLinear(member, "Linear user")));
+      return safeConfig(
+        config,
+        lastSyncedAt,
+        memberCatalog.map((member) => actorFromLinear(member, "Linear user")),
+        { ...metadataCatalog, labels: labelCatalog.map((label) => ({ id: String(label.id), name: label.name })) },
+      );
     }
     if (pendingSync) return pendingSync;
     pendingSync = syncWithConfig(config, { full: force }).finally(() => {
@@ -615,7 +660,12 @@ export function createLinearIntegration({ configStore, database, fetch: fetchImp
       const config = await configStore.read();
       if (!config) return safeConfig(null);
       if (memberCatalog.length === 0) await fetchMetadata(config);
-      return safeConfig(config, lastSyncedAt, memberCatalog.map((member) => actorFromLinear(member, "Linear user")));
+      return safeConfig(
+        config,
+        lastSyncedAt,
+        memberCatalog.map((member) => actorFromLinear(member, "Linear user")),
+        { ...metadataCatalog, labels: labelCatalog.map((label) => ({ id: String(label.id), name: label.name })) },
+      );
     },
     async configure(input) {
       const current = await configStore.read();
@@ -635,7 +685,12 @@ export function createLinearIntegration({ configStore, database, fetch: fetchImp
       );
       const savedConfig = await configStore.save(config);
       lastSyncedAt = new Date().toISOString();
-      return safeConfig(savedConfig, lastSyncedAt, memberCatalog.map((member) => actorFromLinear(member, "Linear user")));
+      return safeConfig(
+        savedConfig,
+        lastSyncedAt,
+        memberCatalog.map((member) => actorFromLinear(member, "Linear user")),
+        { ...metadataCatalog, labels: labelCatalog.map((label) => ({ id: String(label.id), name: label.name })) },
+      );
     },
     sync,
     async reconcile() {
@@ -657,7 +712,10 @@ export function createLinearIntegration({ configStore, database, fetch: fetchImp
       if (data.issue.identifier && data.issue.team?.id) issueTeams.set(data.issue.identifier, data.issue.team.id);
       const localTask = database.getTask(detail.id);
       if (localTask) {
+        detail.codeProjectMode = localTask.codeProjectMode;
+        detail.codeProjectBinding = localTask.codeProjectBinding;
         detail.developmentContext = localTask.developmentContext;
+        detail.managedWorktree = localTask.managedWorktree;
         detail.locallyTracked = true;
         detail.version = localTask.version;
       }
@@ -765,6 +823,10 @@ export function createLinearIntegration({ configStore, database, fetch: fetchImp
       if (issue.identifier && issue.team?.id) issueTeams.set(issue.identifier, issue.team.id);
       const normalized = {
         ...normalizeIssue(issue, config),
+        codeProjectMode: input.codeProjectMode ?? "auto",
+        codeProjectBinding: input.codeProjectMode === "none"
+          ? null
+          : input.codeProjectBinding ?? routeCodeProject(issue, config.routes),
         developmentContext: input.developmentContext ?? null,
       };
       database.syncLinearTasks([normalized], {

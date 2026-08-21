@@ -11,6 +11,8 @@ import {
   TASK_PRIORITIES,
   TASK_STATUSES,
   type ActorIdentity,
+  type CodeProjectBinding,
+  type CodeProjectMode,
   type DevelopmentContext,
   type DevelopmentScan,
   type Recurrence,
@@ -93,6 +95,8 @@ export interface NewTaskEditorDraft {
   assignee: ActorIdentity;
   selectedLabels: string[];
   developmentContext: DevelopmentContext | null;
+  codeProjectMode: CodeProjectMode;
+  codeProjectBinding: CodeProjectBinding | null;
   startDate: string;
   dueDate: string;
   recurrence: Recurrence | null;
@@ -110,7 +114,13 @@ interface TaskEditorProps {
   initialStatus: TaskStatus;
   initialDraft: NewTaskEditorDraft | null;
   labels: string[];
-  codexProjects?: Array<{ id: string; name: string; workspacePath?: string }>;
+  codexProjects?: Array<{
+    id: string;
+    name: string;
+    projectKind?: "local" | "remote";
+    hostId?: string;
+    workspacePath?: string;
+  }>;
   showCodeProjectPicker?: boolean;
   currentUser: ActorIdentity;
   availableAssignees?: ActorIdentity[];
@@ -202,6 +212,8 @@ export function TaskEditor({
   const [assignee, setAssignee] = useState<ActorIdentity>(task?.assignee ?? initialDraft?.assignee ?? currentUser);
   const [selectedLabels, setSelectedLabels] = useState<string[]>(task?.labels ?? initialDraft?.selectedLabels ?? []);
   const [developmentContext, setDevelopmentContext] = useState<DevelopmentContext | null>(task?.developmentContext ?? initialDraft?.developmentContext ?? null);
+  const [codeProjectMode, setCodeProjectMode] = useState<CodeProjectMode>(task?.codeProjectMode ?? initialDraft?.codeProjectMode ?? "auto");
+  const [codeProjectBinding, setCodeProjectBinding] = useState<CodeProjectBinding | null>(task?.codeProjectBinding ?? initialDraft?.codeProjectBinding ?? null);
   const [startDate] = useState(task?.startDate ?? initialDraft?.startDate ?? "");
   const [dueDate, setDueDate] = useState(task?.dueDate ?? initialDraft?.dueDate ?? "");
   const [recurrence, setRecurrence] = useState<Recurrence | null>(task?.recurrence ?? initialDraft?.recurrence ?? null);
@@ -225,9 +237,11 @@ export function TaskEditor({
     }
     return options;
   }, [developmentContext, developmentScan.contexts]);
-  const selectedCodexProjectId = developmentContext?.type === "worktree"
-    ? codexProjects.find((project) => project.workspacePath === developmentContext.path)?.id ?? ""
-    : "";
+  const selectedCodeProjectValue = codeProjectMode === "auto"
+    ? "auto"
+    : codeProjectMode === "none"
+      ? "none"
+      : codeProjectBinding ? `project:${codeProjectBinding.codexProjectId}` : "auto";
 
   const taskById = useMemo(() => new Map(tasks.map((candidate) => [candidate.id, candidate])), [tasks]);
   const availableRelationTasks = tasks.filter((candidate) => candidate.archivedAt === null);
@@ -419,6 +433,8 @@ export function TaskEditor({
         labels: selectedLabels,
         ...(assigneeTarget ? { assigneeTarget } : {}),
         ...(assigneeId ? { assigneeId } : {}),
+        codeProjectMode,
+        codeProjectBinding,
         developmentContext,
         startDate: startDate || null,
         dueDate: dueDate || null,
@@ -498,6 +514,8 @@ export function TaskEditor({
       priority,
       assignee,
       selectedLabels,
+      codeProjectMode,
+      codeProjectBinding,
       developmentContext,
       startDate,
       dueDate,
@@ -655,15 +673,22 @@ export function TaskEditor({
             />
             {!task && showCodeProjectPicker && (
               <TaskPropertyPicker
-                value={selectedCodexProjectId}
+                value={selectedCodeProjectValue}
                 options={[
                   {
-                    value: "",
-                    label: text("代码项目", "Code project"),
+                    value: "auto",
+                    label: codeProjectBinding
+                      ? text(`自动匹配 · ${codeProjectBinding.name}`, `Auto · ${codeProjectBinding.name}`)
+                      : text("自动匹配代码项目", "Auto-match code project"),
+                    icon: <LinearIcon name="folder" />,
+                  },
+                  {
+                    value: "none",
+                    label: text("不绑定代码项目", "Do not link a code project"),
                     icon: <LinearIcon name="folder" />,
                   },
                   ...codexProjects.filter((project) => project.workspacePath).map((project) => ({
-                    value: project.id,
+                    value: `project:${project.id}`,
                     label: project.name,
                     icon: <LinearIcon name="folder" />,
                   })),
@@ -676,10 +701,26 @@ export function TaskEditor({
                 emptyText={text("没有匹配的项目", "No matching projects")}
                 onOpenChange={(open) => setMenu(open ? "codexProject" : null)}
                 onChange={(value) => {
-                  const selected = codexProjects.find((project) => project.id === value);
-                  setDevelopmentContext(selected?.workspacePath
-                    ? { type: "worktree", path: selected.workspacePath, branch: null }
-                    : null);
+                  if (value === "auto") {
+                    setCodeProjectMode("auto");
+                    setCodeProjectBinding(null);
+                    return;
+                  }
+                  if (value === "none") {
+                    setCodeProjectMode("none");
+                    setCodeProjectBinding(null);
+                    return;
+                  }
+                  const selected = codexProjects.find((project) => `project:${project.id}` === value);
+                  if (!selected?.workspacePath) return;
+                  setCodeProjectMode("explicit");
+                  setCodeProjectBinding({
+                    codexProjectId: selected.id,
+                    codexProjectKind: selected.projectKind ?? "local",
+                    codexHostId: selected.hostId ?? "local",
+                    workspacePath: selected.workspacePath,
+                    name: selected.name,
+                  });
                 }}
               />
             )}

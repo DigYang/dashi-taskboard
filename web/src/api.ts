@@ -196,6 +196,10 @@ export async function getLinearConnection(signal?: AbortSignal): Promise<LinearC
         teams: [],
         projects: [],
         members: [],
+        availableProjects: [],
+        availableTeams: [],
+        availableLabels: [],
+        routes: [],
         projectId: "linear-my-issues",
         lastSyncedAt: null,
       };
@@ -208,6 +212,7 @@ export async function configureLinearConnection(input: {
   apiKey: string;
   teams: string[];
   projects: string[];
+  routes: LinearConnection["routes"];
 }): Promise<LinearConnection> {
   const data = await request<{ connection: LinearConnection }>("/api/local/linear-connection", {
     method: "PUT",
@@ -628,6 +633,28 @@ export async function moveTask(
     },
   );
   return data.task;
+}
+
+export async function prepareTaskWorktree(task: Task): Promise<Task> {
+  const data = await request<{ task: Task }>(
+    `/api/tasks/${encodeURIComponent(task.id)}/prepare-worktree`,
+    {
+      method: "POST",
+      body: JSON.stringify({ version: task.version }),
+    },
+  );
+  return data.task;
+}
+
+export async function releaseTaskWorktree(task: Task): Promise<{
+  task: Task;
+  released: boolean;
+  reason: "dirty" | "unmerged" | null;
+}> {
+  return request(`/api/tasks/${encodeURIComponent(task.id)}/release-worktree`, {
+    method: "POST",
+    body: JSON.stringify({ version: task.version }),
+  });
 }
 
 export async function archiveTask(task: Task, threadId?: string): Promise<Task> {

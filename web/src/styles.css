@@ -4700,7 +4700,73 @@ kbd {
 
 .jira-connection-dialog,
 .linear-connection-dialog {
-  width: min(400px, 100%);
+  width: min(560px, 100%);
+  max-height: min(720px, calc(100vh - 40px));
+  overflow: auto;
+}
+
+.linear-routing-settings {
+  display: grid;
+  gap: 10px;
+  margin-top: 16px;
+  padding: 12px;
+  border: var(--border-hairline) solid var(--border-subtle);
+  border-radius: 8px;
+  background: var(--surface);
+}
+
+.linear-routing-settings h3 {
+  margin: 0;
+  font-size: 12px;
+  font-weight: 590;
+}
+
+.linear-routing-rules {
+  display: grid;
+  gap: 6px;
+}
+
+.linear-routing-rule {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) 24px;
+  align-items: center;
+  gap: 8px;
+  min-height: 30px;
+  padding: 0 6px 0 9px;
+  border-radius: 6px;
+  background: var(--surface-raised);
+  color: var(--text-secondary);
+  font-size: 11px;
+}
+
+.linear-routing-rule span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.linear-routing-rule button {
+  border: 0;
+  background: transparent;
+  color: var(--text-tertiary);
+  cursor: pointer;
+}
+
+.linear-routing-builder {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 7px;
+}
+
+.linear-routing-builder select {
+  min-width: 0;
+  height: 32px;
+  padding: 0 8px;
+  border: var(--border-hairline) solid var(--border-strong);
+  border-radius: 6px;
+  background: var(--surface-raised);
+  color: var(--text-primary);
+  font: inherit;
 }
 
 .delete-dialog .jira-http-warning {
@@ -8315,6 +8381,24 @@ kbd {
 
 .toolbar-tools {
   gap: 5px;
+}
+
+.linear-inbox-toggle {
+  height: 28px;
+  padding: 0 10px;
+  border: var(--border-hairline) solid transparent;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 10px;
+  white-space: nowrap;
+}
+
+.linear-inbox-toggle:hover,
+.linear-inbox-toggle.is-active {
+  border-color: var(--border);
+  background: var(--surface);
+  color: var(--text-primary);
 }
 
 .search-field,

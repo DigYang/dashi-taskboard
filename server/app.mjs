@@ -34,6 +34,7 @@ import { createJiraIntegration } from "./jira-integration.mjs";
 import { createLinearConfigStore } from "./linear-config.mjs";
 import { createLinearIntegration } from "./linear-integration.mjs";
 import { ProjectSummaryService } from "./project-summary.mjs";
+import { createWorktreeManager } from "./worktree-manager.mjs";
 
 const PROJECT_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const execFileAsync = promisify(execFile);
@@ -324,6 +325,41 @@ function parseDevelopmentContext(value) {
   throw new ApiError(400, "INVALID_FIELD", "'developmentContext.type' must be branch or worktree");
 }
 
+function parseCodeProjectMode(value) {
+  if (value === undefined) return undefined;
+  if (!["auto", "explicit", "none"].includes(value)) {
+    throw new ApiError(400, "INVALID_FIELD", "'codeProjectMode' must be auto, explicit, or none");
+  }
+  return value;
+}
+
+function parseCodeProjectBinding(value) {
+  if (value === undefined) return undefined;
+  if (value === null) return null;
+  assertPlainObject(value);
+  assertAllowedKeys(value, new Set([
+    "codexProjectId", "codexProjectKind", "codexHostId", "workspacePath", "name",
+  ]));
+  const workspacePath = stringField(value.workspacePath, "codeProjectBinding.workspacePath", {
+    required: true,
+    maxLength: 4096,
+  });
+  if (!path.isAbsolute(workspacePath) || workspacePath.includes("\0")) {
+    throw new ApiError(400, "INVALID_FIELD", "'codeProjectBinding.workspacePath' must be an absolute path");
+  }
+  const codexProjectKind = value.codexProjectKind;
+  if (codexProjectKind !== "local" && codexProjectKind !== "remote") {
+    throw new ApiError(400, "INVALID_FIELD", "'codeProjectBinding.codexProjectKind' is invalid");
+  }
+  return {
+    codexProjectId: stringField(value.codexProjectId, "codeProjectBinding.codexProjectId", { required: true, maxLength: 256 }),
+    codexProjectKind,
+    codexHostId: stringField(value.codexHostId, "codeProjectBinding.codexHostId", { required: true, maxLength: 240 }),
+    workspacePath: path.resolve(workspacePath),
+    name: stringField(value.name, "codeProjectBinding.name", { required: true, maxLength: 240 }),
+  };
+}
+
 function parseRecurrence(value) {
   if (value === null) return null;
   assertPlainObject(value);
@@ -573,7 +609,8 @@ function parseTaskCreate(body) {
   assertPlainObject(body);
   assertAllowedKeys(body, new Set([
     "projectId", "title", "description", "status", "priority", "labels", "sortOrder", "threadId", "threadBinding",
-    "assigneeTarget", "assigneeId", "developmentContext", "startDate", "dueDate", "recurrence",
+    "assigneeTarget", "assigneeId", "codeProjectMode", "codeProjectBinding",
+    "developmentContext", "startDate", "dueDate", "recurrence",
   ]));
   const projectId = validateProjectId(body.projectId ?? DEFAULT_PROJECT_ID);
   const task = {
@@ -588,6 +625,8 @@ function parseTaskCreate(body) {
     threadBinding: parseThreadBinding(body.threadBinding),
     assigneeTarget: parseAssigneeTarget(body.assigneeTarget),
     assigneeId: parseAssigneeId(body.assigneeId),
+    codeProjectMode: parseCodeProjectMode(body.codeProjectMode) ?? "auto",
+    codeProjectBinding: parseCodeProjectBinding(body.codeProjectBinding) ?? null,
     developmentContext: parseDevelopmentContext(body.developmentContext ?? null),
     startDate: parseDueDate(body.startDate ?? null, "startDate"),
     dueDate: parseDueDate(body.dueDate ?? null),
@@ -596,6 +635,10 @@ function parseTaskCreate(body) {
   if (task.recurrence && !task.dueDate) {
     throw new ApiError(400, "INVALID_FIELD", "A recurring issue requires 'dueDate'");
   }
+  if (task.codeProjectMode === "explicit" && !task.codeProjectBinding) {
+    throw new ApiError(400, "INVALID_FIELD", "Explicit code project mode requires a binding");
+  }
+  if (task.codeProjectMode === "none") task.codeProjectBinding = null;
   return task;
 }
 
@@ -603,7 +646,8 @@ function parseTaskPatch(body) {
   assertPlainObject(body);
   assertAllowedKeys(body, new Set([
     "version", "projectId", "title", "description", "status", "priority", "estimate", "labels", "threadId", "threadBinding",
-    "assigneeTarget", "assigneeId", "developmentContext", "startDate", "dueDate", "recurrence",
+    "assigneeTarget", "assigneeId", "codeProjectMode", "codeProjectBinding",
+    "developmentContext", "startDate", "dueDate", "recurrence",
   ]));
   const version = parseVersion(body.version);
   const threadId = parseThreadId(body.threadId);
@@ -623,6 +667,8 @@ function parseTaskPatch(body) {
     changes.estimate = body.estimate;
   }
   if (body.labels !== undefined) changes.labels = parseLabels(body.labels);
+  if (body.codeProjectMode !== undefined) changes.codeProjectMode = parseCodeProjectMode(body.codeProjectMode);
+  if (body.codeProjectBinding !== undefined) changes.codeProjectBinding = parseCodeProjectBinding(body.codeProjectBinding);
   if (body.developmentContext !== undefined) changes.developmentContext = parseDevelopmentContext(body.developmentContext);
   if (body.startDate !== undefined) changes.startDate = parseDueDate(body.startDate, "startDate");
   if (body.dueDate !== undefined) changes.dueDate = parseDueDate(body.dueDate);
@@ -630,6 +676,10 @@ function parseTaskPatch(body) {
   if (changes.recurrence && body.dueDate === null) {
     throw new ApiError(400, "INVALID_FIELD", "A recurring issue requires 'dueDate'");
   }
+  if (changes.codeProjectMode === "explicit" && !changes.codeProjectBinding) {
+    throw new ApiError(400, "INVALID_FIELD", "Explicit code project mode requires a binding");
+  }
+  if (changes.codeProjectMode === "none") changes.codeProjectBinding = null;
   if (Object.keys(changes).length === 0 && assigneeTarget === undefined && assigneeId === undefined) {
     throw new ApiError(400, "INVALID_BODY", "PATCH requires at least one task field");
   }
@@ -1559,6 +1609,7 @@ export function createTaskboardServer(options = {}) {
   );
   const routePrefix = resolved.instanceToken ? `/${resolved.instanceToken}` : "";
   const database = new TaskboardDatabase(resolved.databasePath);
+  const worktrees = createWorktreeManager({ dataDirectory: resolved.dataDirectory });
   const events = new EventHub();
   let clientStorageWrite = Promise.resolve();
 
@@ -2172,7 +2223,7 @@ export function createTaskboardServer(options = {}) {
           }
           const body = await readJson(request);
           assertPlainObject(body);
-          assertAllowedKeys(body, new Set(["apiKey", "teams", "projects"]));
+          assertAllowedKeys(body, new Set(["apiKey", "teams", "projects", "routes"]));
           const apiKey = body.apiKey ?? "";
           if (typeof apiKey !== "string") {
             throw new ApiError(400, "INVALID_FIELD", "'apiKey' must be a string");
@@ -2185,6 +2236,7 @@ export function createTaskboardServer(options = {}) {
               apiKey,
               teams: body.teams,
               projects: body.projects,
+              routes: body.routes,
             });
             events.emit("project.labels.updated", { project: database.getProject(LINEAR_PROJECT_ID) });
             return sendJson(response, 200, { connection });
@@ -3022,7 +3074,7 @@ export function createTaskboardServer(options = {}) {
         return sendEmpty(response, 204);
       }
 
-      const taskRoute = pathname.match(/^\/api\/tasks\/([^/]+)(?:\/(archive|restore|move))?$/);
+      const taskRoute = pathname.match(/^\/api\/tasks\/([^/]+)(?:\/(archive|restore|move|prepare-worktree|release-worktree))?$/);
       if (taskRoute) {
         let id;
         try {
@@ -3065,15 +3117,25 @@ export function createTaskboardServer(options = {}) {
               ...changes,
               ...(assigneeId !== undefined ? { assigneeId } : {}),
             });
-            if (storedTask && Object.hasOwn(changes, "developmentContext")) {
+            if (storedTask && ["developmentContext", "codeProjectMode", "codeProjectBinding"].some(
+              (field) => Object.hasOwn(changes, field),
+            )) {
+              const localChanges = Object.fromEntries(
+                ["developmentContext", "codeProjectMode", "codeProjectBinding"]
+                  .filter((field) => Object.hasOwn(changes, field))
+                  .map((field) => [field, changes[field]]),
+              );
               database.updateTask(
                 id,
                 storedTask.version,
-                { developmentContext: changes.developmentContext },
+                localChanges,
                 threadId,
                 threadBinding,
                 actor,
               );
+              if (localChanges.codeProjectMode === "auto") {
+                await linear.reconcile();
+              }
             }
             const task = await linear.getIssueDetail(id);
             events.emit("task.updated", { task });
@@ -3214,6 +3276,43 @@ export function createTaskboardServer(options = {}) {
           }
           events.emit("task.deleted", { task: deleted.task });
           return sendEmpty(response, 204);
+        }
+        if (action === "prepare-worktree" && request.method === "POST") {
+          const { version } = parseArchive(await readJson(request));
+          const current = database.getTask(id);
+          if (!current) throw new ApiError(404, "TASK_NOT_FOUND", `Task '${id}' does not exist`);
+          if (current.version !== version) {
+            throw new ApiError(409, "VERSION_CONFLICT", "Task changed since it was last read", {
+              expectedVersion: version,
+              actualVersion: current.version,
+            });
+          }
+          if (current.status !== "in_progress") {
+            throw new ApiError(409, "TASK_NOT_IN_PROGRESS", "任务进入进行中后才能创建 Worktree");
+          }
+          const worktree = await worktrees.prepare(current);
+          const task = current.managedWorktree
+            ? current
+            : database.setManagedWorktree(id, version, worktree, actorFromRequest(request));
+          events.emit("task.updated", { task });
+          return sendJson(response, 200, { task, worktree });
+        }
+        if (action === "release-worktree" && request.method === "POST") {
+          const { version } = parseArchive(await readJson(request));
+          const current = database.getTask(id);
+          if (!current) throw new ApiError(404, "TASK_NOT_FOUND", `Task '${id}' does not exist`);
+          if (current.version !== version) {
+            throw new ApiError(409, "VERSION_CONFLICT", "Task changed since it was last read", {
+              expectedVersion: version,
+              actualVersion: current.version,
+            });
+          }
+          const result = await worktrees.release(current);
+          const task = result.released
+            ? database.clearManagedWorktree(id, version, actorFromRequest(request))
+            : current;
+          if (result.released) events.emit("task.updated", { task });
+          return sendJson(response, 200, { task, released: result.released, reason: result.reason });
         }
         if (action === "move" && request.method === "POST") {
           const move = resolveInputThreadBinding(parseMove(await readJson(request)));

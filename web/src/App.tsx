@@ -49,6 +49,8 @@ import {
   listTasks,
   moveTask as moveTaskRequest,
   publishHostRuntime,
+  prepareTaskWorktree,
+  releaseTaskWorktree,
   removeTaskRelation,
   resolveTaskboardUrl,
   restoreTask as restoreTaskRequest,
@@ -139,6 +141,7 @@ import {
   type IssueRelationType,
   type JiraConnection,
   type LinearConnection,
+  type LinearRoutingRule,
   type Project,
   type Task,
   type TaskRelationSummary,
@@ -793,6 +796,7 @@ export function App() {
       : text(actionError[0], actionError[1]);
   const [connection, setConnection] = useState<ConnectionState>("connecting");
   const [search, setSearch] = useState("");
+  const [linearInboxOnly, setLinearInboxOnly] = useState(false);
   const [filters, setFilters] = useState(readTaskFilters);
   const [boardView, setBoardView] = useState<BoardView>(() => readProjectBoardView(initialProjectId));
   const [boardCardDisplay, setBoardCardDisplay] = useState<BoardCardDisplay>(readBoardCardDisplay);
@@ -1990,10 +1994,24 @@ export function App() {
     ));
     try {
       const taskProjectId = projectId === ALL_PROJECTS_ID ? undefined : projectId;
-      const [nextTasks, nextArchivedTasks] = await Promise.all([
+      let [nextTasks, nextArchivedTasks] = await Promise.all([
         listTasks(taskProjectId, options.signal),
         listArchivedTasks(taskProjectId, options.signal),
       ]);
+      if (projectId !== ALL_PROJECTS_ID && projectId !== GLOBAL_PROJECT_ID && projectId !== LINEAR_PROJECT_ID) {
+        const [linearTasks, archivedLinearTasks] = await Promise.all([
+          listTasks(LINEAR_PROJECT_ID, options.signal),
+          listArchivedTasks(LINEAR_PROJECT_ID, options.signal),
+        ]);
+        const selectedCodeProjectPath = (await listProjects(options.signal))
+          .find((project) => project.id === projectId)?.workspacePath;
+        const isRoutedHere = (task: Task) => (
+          task.codeProjectBinding?.codexProjectId === projectId
+          || Boolean(selectedCodeProjectPath && task.codeProjectBinding?.workspacePath === selectedCodeProjectPath)
+        );
+        nextTasks = [...nextTasks, ...linearTasks.filter(isRoutedHere)];
+        nextArchivedTasks = [...nextArchivedTasks, ...archivedLinearTasks.filter(isRoutedHere)];
+      }
       if (requestId !== tasksRequestRef.current) return;
       setTasks(sortTasks(nextTasks));
       setArchivedTasks(sortTasks(nextArchivedTasks));
@@ -2299,16 +2317,18 @@ export function App() {
 
   const filteredTasks = useMemo(() => {
     return tasks.filter(
-      (task) => matchesTaskSearch(task, search, language) && matchesTaskFilters(task, filters),
+      (task) => (!isLinearProject || !linearInboxOnly || !task.codeProjectBinding)
+        && matchesTaskSearch(task, search, language)
+        && matchesTaskFilters(task, filters),
     );
-  }, [filters, language, search, tasks]);
+  }, [filters, isLinearProject, language, linearInboxOnly, search, tasks]);
 
   const filteredArchivedTasks = useMemo(() => archivedTasks.filter(
     (task) => matchesTaskSearch(task, search, language) && matchesTaskFilters(task, filters),
   ), [archivedTasks, filters, language, search]);
 
   const activeFilterCount = taskFilterCount(filters);
-  const hasActiveTaskFilters = Boolean(search.trim()) || activeFilterCount > 0;
+  const hasActiveTaskFilters = Boolean(search.trim()) || activeFilterCount > 0 || (isLinearProject && linearInboxOnly);
 
   const trackedCodexThreadIds = useMemo(() => [...new Set(tasks
     .filter((task) => task.status === "in_progress" && task.threadId)
@@ -2639,7 +2659,16 @@ export function App() {
     )));
 
     try {
-      const moved = await moveTaskRequest(task, status, sortOrder);
+      let moved = await moveTaskRequest(task, status, sortOrder);
+      if ((status === "done" || status === "canceled") && moved.managedWorktree) {
+        const released = await releaseTaskWorktree(moved);
+        moved = released.task;
+        if (!released.released) {
+          setAnnouncement(released.reason === "dirty"
+            ? textRef.current("任务已完成；Worktree 有未提交改动，已保留。", "Task completed; its Worktree was kept because it has uncommitted changes.")
+            : textRef.current("任务已完成；分支尚未合入 main，Worktree 已保留。", "Task completed; its Worktree was kept because the branch is not merged into main."));
+        }
+      }
       setTasks((current) => sortTasks(current.map((candidate) =>
         candidate.id === moved.id ? moved : candidate,
       )));
@@ -3322,10 +3351,17 @@ export function App() {
   async function openTaskInThread(task: Task) {
     const projectless = task.projectId === GLOBAL_PROJECT_ID;
     const taskboardProject = projects.find((project) => project.id === task.projectId);
+    const boundCodeProject = task.codeProjectBinding ? {
+      codexProjectId: task.codeProjectBinding.codexProjectId,
+      codexProjectKind: task.codeProjectBinding.codexProjectKind,
+      codexHostId: task.codeProjectBinding.codexHostId,
+      workspacePath: task.codeProjectBinding.workspacePath,
+    } : null;
     const savedRemoteIdentity = projectCodexIdentities[task.projectId]?.codexProjectKind === "remote"
       ? projectCodexIdentities[task.projectId]
       : null;
-    const codexProjectContext = savedRemoteIdentity
+    const codexProjectContext = boundCodeProject
+      ?? savedRemoteIdentity
       ?? codexProjectContextForTaskProject(task.projectId);
     if (
       projectCodexIdentities[task.projectId]?.codexProjectKind === "remote"
@@ -3337,7 +3373,7 @@ export function App() {
       ));
       return;
     }
-    const workspacePath = projectless
+    let workspacePath = projectless
       ? undefined
       : task.developmentContext?.type === "worktree"
         ? task.developmentContext.path
@@ -3407,6 +3443,7 @@ export function App() {
       return;
     }
     let taskToOpen = task;
+    let taskBeforeClaim: Task | null = null;
     if (task.status === "backlog" || task.status === "todo") {
       try {
         const latestTask = await getTask(task.id);
@@ -3421,12 +3458,8 @@ export function App() {
             "This issue was started or changed elsewhere. Refresh and try again.",
           ));
         }
+        taskBeforeClaim = latestTask;
         taskToOpen = await moveTaskRequest(latestTask, "in_progress", undefined, null);
-        pendingLocalThreadStartsRef.current.set(task.id, {
-          claimedTask: taskToOpen,
-          previousTask: latestTask,
-          identity: codexProjectContext ?? null,
-        });
         updateTaskFromRemoteThread(taskToOpen);
       } catch (error) {
         setOpeningThreadTaskId(null);
@@ -3440,6 +3473,32 @@ export function App() {
         return;
       }
     }
+    if (taskToOpen.codeProjectBinding?.codexProjectKind === "local" && !taskToOpen.managedWorktree) {
+      try {
+        taskToOpen = await prepareTaskWorktree(taskToOpen);
+        workspacePath = taskToOpen.developmentContext?.type === "worktree"
+          ? taskToOpen.developmentContext.path
+          : workspacePath;
+        updateTaskFromRemoteThread(taskToOpen);
+      } catch (error) {
+        if (taskBeforeClaim) {
+          try {
+            taskToOpen = await moveTaskRequest(taskToOpen, taskBeforeClaim.status, taskBeforeClaim.sortOrder, null);
+            updateTaskFromRemoteThread(taskToOpen);
+          } catch {}
+        }
+        setOpeningThreadTaskId(null);
+        setActionError(errorMessage(error));
+        return;
+      }
+    }
+    if (taskBeforeClaim) {
+      pendingLocalThreadStartsRef.current.set(task.id, {
+        claimedTask: taskToOpen,
+        previousTask: taskBeforeClaim,
+        identity: codexProjectContext ?? null,
+      });
+    }
     postEmbeddedHostMessage({
       type: "taskboard:create-thread",
       payload: {
@@ -3449,7 +3508,7 @@ export function App() {
         description: taskToOpen.description,
         canonicalReferences,
         instruction: embeddedInstruction,
-        projectName: taskboardProject?.name,
+        projectName: taskToOpen.codeProjectBinding?.name ?? taskboardProject?.name,
         projectless,
         codexProjectId: codexProjectContext?.codexProjectId,
         codexProjectKind: codexProjectContext?.codexProjectKind ?? "local",
@@ -3581,6 +3640,7 @@ export function App() {
     apiKey: string;
     teams: string[];
     projects: string[];
+    routes: LinearRoutingRule[];
   }) {
     if (linearSaving) return;
     setLinearSaving(true);
@@ -4003,6 +4063,16 @@ export function App() {
             )}
           </div>
           {(boardView === "issues" || boardView === "list" || boardView === "gantt") && <div className="toolbar-tools">
+            {isLinearProject && (
+              <button
+                className={`linear-inbox-toggle${linearInboxOnly ? " is-active" : ""}`}
+                type="button"
+                aria-pressed={linearInboxOnly}
+                onClick={() => setLinearInboxOnly((current) => !current)}
+              >
+                {text("未绑定 Inbox", "Unlinked inbox")}
+              </button>
+            )}
             <div className={`search-field${search ? " has-value" : ""}`} title={text("搜索议题 (/)", "Search issues (/)")}>
               <TaskboardIcon className="search-icon" name="search" />
               <input
@@ -4372,6 +4442,7 @@ export function App() {
           connection={linearConnection}
           saving={linearSaving}
           error={linearError}
+          codeProjects={codeProjects}
           onClose={() => {
             if (!linearSaving) setLinearDialogOpen(false);
           }}

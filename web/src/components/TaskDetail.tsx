@@ -31,6 +31,7 @@ import { TASK_PRIORITIES, TASK_STATUSES } from "../types";
 import type {
   ActorIdentity,
   Attachment,
+  CodeProjectBinding,
   Comment,
   CodexThreadBinding,
   DevelopmentContext,
@@ -107,7 +108,13 @@ interface TaskDetailProps {
   referenceTasks: Task[];
   currentUser: ActorIdentity;
   availableAssignees?: ActorIdentity[];
-  availableCodeProjects?: Array<{ id: string; name: string; workspacePath?: string }>;
+  availableCodeProjects?: Array<{
+    id: string;
+    name: string;
+    projectKind?: "local" | "remote";
+    hostId?: string;
+    workspacePath?: string;
+  }>;
   availableLabels: string[];
   developmentScan: DevelopmentScan;
   developmentScanLoading: boolean;
@@ -1022,12 +1029,11 @@ export function TaskDetail({
   ) {
     developmentOptions.unshift(currentTask.developmentContext);
   }
-  const currentWorktreePath = currentTask.developmentContext?.type === "worktree"
-    ? currentTask.developmentContext.path
-    : null;
-  const selectedCodeProjectId = currentWorktreePath
-    ? availableCodeProjects.find((project) => project.workspacePath === currentWorktreePath)?.id ?? ""
-    : "";
+  const selectedCodeProjectValue = currentTask.codeProjectMode === "none"
+    ? "none"
+    : currentTask.codeProjectMode === "explicit"
+      ? currentTask.codeProjectBinding ? `project:${currentTask.codeProjectBinding.codexProjectId}` : "auto"
+      : "auto";
   const assigneeOptions = [
     currentTask.assignee,
     currentUser,
@@ -1845,17 +1851,24 @@ export function TaskDetail({
               <div className="detail-property-row">
                 <span className="detail-property-label">{text("代码项目", "Code project")}</span>
                 <TaskPropertyPicker
-                  value={selectedCodeProjectId}
+                  value={selectedCodeProjectValue}
                   options={[
-                    { value: "", label: text("未绑定", "Not linked"), icon: <LinearIcon name="folder" /> },
+                    {
+                      value: "auto",
+                      label: currentTask.codeProjectBinding
+                        ? text(`自动匹配 · ${currentTask.codeProjectBinding.name}`, `Auto · ${currentTask.codeProjectBinding.name}`)
+                        : text("自动匹配代码项目", "Auto-match code project"),
+                      icon: <LinearIcon name="folder" />,
+                    },
+                    { value: "none", label: text("不绑定代码项目", "Do not link a code project"), icon: <LinearIcon name="folder" /> },
                     ...availableCodeProjects.filter((project) => project.workspacePath).map((project) => ({
-                      value: project.id,
+                      value: `project:${project.id}`,
                       label: project.name,
                       icon: <LinearIcon name="folder" />,
                     })),
                   ]}
                   open={propertyMenu === "codeProject"}
-                  disabled={readOnly || !currentTask.locallyTracked || savingProperty === "developmentContext"}
+                  disabled={readOnly || !currentTask.locallyTracked || savingProperty === "codeProject"}
                   className="detail-property-picker"
                   triggerClassName="detail-property-trigger"
                   ariaLabel={text("代码项目", "Code project")}
@@ -1864,12 +1877,26 @@ export function TaskDetail({
                   emptyText={text("没有匹配的项目", "No matching projects")}
                   onOpenChange={(open) => setPropertyMenu(open ? "codeProject" : null)}
                   onChange={(value) => {
-                    const selected = availableCodeProjects.find((project) => project.id === value);
+                    if (value === "auto") {
+                      void saveTask({ codeProjectMode: "auto", codeProjectBinding: null }, "codeProject");
+                      return;
+                    }
+                    if (value === "none") {
+                      void saveTask({ codeProjectMode: "none", codeProjectBinding: null }, "codeProject");
+                      return;
+                    }
+                    const selected = availableCodeProjects.find((project) => `project:${project.id}` === value);
+                    const binding: CodeProjectBinding | null = selected?.workspacePath ? {
+                      codexProjectId: selected.id,
+                      codexProjectKind: selected.projectKind ?? "local",
+                      codexHostId: selected.hostId ?? "local",
+                      workspacePath: selected.workspacePath,
+                      name: selected.name,
+                    } : null;
                     void saveTask({
-                      developmentContext: selected?.workspacePath
-                        ? { type: "worktree", path: selected.workspacePath, branch: null }
-                        : null,
-                    }, "developmentContext");
+                      codeProjectMode: binding ? "explicit" : "auto",
+                      codeProjectBinding: binding,
+                    }, "codeProject");
                   }}
                 />
               </div>

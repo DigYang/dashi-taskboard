@@ -1,7 +1,7 @@
 import { chmod, mkdir, readFile, rename, unlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 
-const CONFIG_VERSION = 1;
+const CONFIG_VERSION = 2;
 
 export class LinearConfigError extends Error {
   constructor(code, message) {
@@ -43,12 +43,83 @@ function validateFilters(value, field, label) {
   return [...new Set(filters)];
 }
 
+function validateRoutes(value) {
+  if (value === undefined) return [];
+  if (!Array.isArray(value) || value.length > 100) {
+    throw new LinearConfigError("INVALID_LINEAR_ROUTES", "Linear 代码项目路由最多支持 100 条");
+  }
+  const seen = new Set();
+  return value.map((route) => {
+    if (!route || typeof route !== "object" || Array.isArray(route)) {
+      throw new LinearConfigError("INVALID_LINEAR_ROUTES", "Linear 代码项目路由无效");
+    }
+    const allowedRouteKeys = new Set(["matchType", "matchId", "matchName", "target"]);
+    if (Object.keys(route).some((key) => !allowedRouteKeys.has(key))) {
+      throw new LinearConfigError("INVALID_LINEAR_ROUTES", "Linear 代码项目路由包含未知字段");
+    }
+    if (!["project", "team", "label", "default"].includes(route.matchType)) {
+      throw new LinearConfigError("INVALID_LINEAR_ROUTES", "Linear 代码项目路由类型无效");
+    }
+    const matchId = route.matchType === "default"
+      ? null
+      : typeof route.matchId === "string" && route.matchId.trim()
+        ? route.matchId.trim().slice(0, 240)
+        : null;
+    if (route.matchType !== "default" && !matchId) {
+      throw new LinearConfigError("INVALID_LINEAR_ROUTES", "Linear 代码项目路由缺少匹配对象");
+    }
+    const matchName = typeof route.matchName === "string"
+      ? route.matchName.trim().slice(0, 240)
+      : "";
+    const target = route.target;
+    if (!target || typeof target !== "object" || Array.isArray(target)) {
+      throw new LinearConfigError("INVALID_LINEAR_ROUTES", "Linear 代码项目路由缺少目标项目");
+    }
+    const allowedTargetKeys = new Set([
+      "codexProjectId", "codexProjectKind", "codexHostId", "workspacePath", "name",
+    ]);
+    if (Object.keys(target).some((key) => !allowedTargetKeys.has(key))) {
+      throw new LinearConfigError("INVALID_LINEAR_ROUTES", "Linear 代码项目目标包含未知字段");
+    }
+    if (
+      typeof target.codexProjectId !== "string"
+      || !target.codexProjectId.trim()
+      || !["local", "remote"].includes(target.codexProjectKind)
+      || typeof target.codexHostId !== "string"
+      || !target.codexHostId.trim()
+      || typeof target.workspacePath !== "string"
+      || !path.isAbsolute(target.workspacePath)
+      || typeof target.name !== "string"
+      || !target.name.trim()
+    ) {
+      throw new LinearConfigError("INVALID_LINEAR_ROUTES", "Linear 代码项目目标无效");
+    }
+    const key = `${route.matchType}:${matchId ?? "*"}`;
+    if (seen.has(key)) {
+      throw new LinearConfigError("INVALID_LINEAR_ROUTES", "同一个 Linear 匹配对象只能配置一条路由");
+    }
+    seen.add(key);
+    return {
+      matchType: route.matchType,
+      matchId,
+      matchName,
+      target: {
+        codexProjectId: target.codexProjectId.trim().slice(0, 256),
+        codexProjectKind: target.codexProjectKind,
+        codexHostId: target.codexHostId.trim().slice(0, 240),
+        workspacePath: path.resolve(target.workspacePath),
+        name: target.name.trim().slice(0, 240),
+      },
+    };
+  });
+}
+
 function parseConfig(value) {
   if (
     value === null
     || typeof value !== "object"
     || Array.isArray(value)
-    || value.version !== CONFIG_VERSION
+    || ![1, CONFIG_VERSION].includes(value.version)
   ) {
     throw new LinearConfigError("INVALID_LINEAR_CONFIG", "Linear 配置文件无效");
   }
@@ -60,6 +131,7 @@ function parseConfig(value) {
     "displayName",
     "teams",
     "projects",
+    "routes",
   ]);
   if (Object.keys(value).some((key) => !allowedKeys.has(key))) {
     throw new LinearConfigError("INVALID_LINEAR_CONFIG", "Linear 配置文件包含未知字段");
@@ -81,6 +153,7 @@ function parseConfig(value) {
     displayName: value.displayName.trim().slice(0, 254),
     teams: validateFilters(value.teams, "teams", "Linear Team 筛选"),
     projects: validateFilters(value.projects, "projects", "Linear Project 筛选"),
+    routes: validateRoutes(value.routes),
   };
 }
 
@@ -128,11 +201,12 @@ export function createLinearConfigStore({ configPath }) {
         if (error?.code !== "ENOENT") throw error;
       }
     },
-    validate({ apiKey, teams, projects }) {
+    validate({ apiKey, teams, projects, routes }) {
       return {
         apiKey: validateApiKey(apiKey),
         teams: validateFilters(teams, "teams", "Linear Team 筛选"),
         projects: validateFilters(projects, "projects", "Linear Project 筛选"),
+        routes: validateRoutes(routes),
       };
     },
   };

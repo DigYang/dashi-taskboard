@@ -243,7 +243,20 @@ function taskFromRow(row) {
       name: row.assignee_name,
       avatarUrl: row.assignee_avatar_url,
     },
+    codeProjectMode: row.code_project_mode ?? "auto",
+    codeProjectBinding: row.code_project_id && row.code_workspace_path
+      ? {
+          codexProjectId: row.code_project_id,
+          codexProjectKind: row.code_project_kind ?? "local",
+          codexHostId: row.code_host_id ?? "local",
+          workspacePath: row.code_workspace_path,
+          name: row.code_project_name ?? row.code_project_id,
+        }
+      : null,
     developmentContext,
+    managedWorktree: row.managed_worktree === 1 && row.managed_repository_path
+      ? { repositoryPath: row.managed_repository_path, baseRef: row.managed_base_ref ?? "main" }
+      : null,
     startDate: row.start_date,
     dueDate: row.due_date,
     recurrence: row.recurrence_interval && row.recurrence_unit
@@ -258,6 +271,16 @@ function taskFromRow(row) {
     externalId: row.external_id ?? null,
     externalKey: row.external_key ?? null,
     externalUrl: row.external_url ?? null,
+    externalProject: row.external_project_id
+      ? { id: row.external_project_id, name: row.external_project_name ?? row.external_project_id }
+      : null,
+    externalTeam: row.external_team_id
+      ? {
+          id: row.external_team_id,
+          key: row.external_team_key ?? undefined,
+          name: row.external_team_name ?? row.external_team_id,
+        }
+      : null,
     archivedAt: row.archived_at,
     version: row.version,
     createdAt: row.created_at,
@@ -460,9 +483,18 @@ export class TaskboardDatabase {
         assignee_id TEXT NOT NULL DEFAULT 'local-user',
         assignee_name TEXT NOT NULL DEFAULT '本地用户',
         assignee_avatar_url TEXT,
+        code_project_mode TEXT NOT NULL DEFAULT 'auto' CHECK (code_project_mode IN ('auto', 'explicit', 'none')),
+        code_project_id TEXT,
+        code_project_name TEXT,
+        code_project_kind TEXT,
+        code_host_id TEXT,
+        code_workspace_path TEXT,
         git_branch TEXT,
         worktree_path TEXT,
         worktree_branch TEXT,
+        managed_worktree INTEGER NOT NULL DEFAULT 0 CHECK (managed_worktree IN (0, 1)),
+        managed_repository_path TEXT,
+        managed_base_ref TEXT,
         start_date TEXT,
         due_date TEXT,
         recurrence_interval INTEGER,
@@ -472,6 +504,11 @@ export class TaskboardDatabase {
         external_id TEXT,
         external_key TEXT,
         external_url TEXT,
+        external_project_id TEXT,
+        external_project_name TEXT,
+        external_team_id TEXT,
+        external_team_key TEXT,
+        external_team_name TEXT,
         external_parent TEXT,
         archived_at TEXT,
         version INTEGER NOT NULL DEFAULT 1 CHECK (version > 0),
@@ -645,6 +682,26 @@ export class TaskboardDatabase {
     }
     if (!taskColumns.some((column) => column.name === "worktree_branch")) {
       this.database.exec("ALTER TABLE tasks ADD COLUMN worktree_branch TEXT");
+    }
+    for (const [column, definition] of [
+      ["code_project_mode", "TEXT NOT NULL DEFAULT 'auto' CHECK (code_project_mode IN ('auto', 'explicit', 'none'))"],
+      ["code_project_id", "TEXT"],
+      ["code_project_name", "TEXT"],
+      ["code_project_kind", "TEXT"],
+      ["code_host_id", "TEXT"],
+      ["code_workspace_path", "TEXT"],
+      ["managed_worktree", "INTEGER NOT NULL DEFAULT 0 CHECK (managed_worktree IN (0, 1))"],
+      ["managed_repository_path", "TEXT"],
+      ["managed_base_ref", "TEXT"],
+      ["external_project_id", "TEXT"],
+      ["external_project_name", "TEXT"],
+      ["external_team_id", "TEXT"],
+      ["external_team_key", "TEXT"],
+      ["external_team_name", "TEXT"],
+    ]) {
+      if (!taskColumns.some((candidate) => candidate.name === column)) {
+        this.database.exec(`ALTER TABLE tasks ADD COLUMN ${column} ${definition}`);
+      }
     }
     if (!taskColumns.some((column) => column.name === "due_date")) {
       this.database.exec("ALTER TABLE tasks ADD COLUMN due_date TEXT");
@@ -1257,18 +1314,20 @@ export class TaskboardDatabase {
           thread_codex_host_id, thread_workspace_path,
           creator_type, creator_id, creator_name, creator_avatar_url,
           assignee_type, assignee_id, assignee_name, assignee_avatar_url,
-          workflow_id, git_branch, worktree_path, worktree_branch,
+          code_project_mode, code_project_id, code_project_name, code_project_kind,
+          code_host_id, code_workspace_path, git_branch, worktree_path, worktree_branch,
           start_date, due_date, recurrence_interval, recurrence_unit, estimate,
           external_source, external_origin, external_id, external_key, external_url, external_parent,
+          external_project_id, external_project_name, external_team_id, external_team_key, external_team_name,
           archived_at, version, created_at, updated_at
         ) VALUES (
           ?, ?, ?, ?, ?, ?, ?, ?, ?,
           ?, NULL, NULL, NULL, NULL, NULL,
           ?, ?, ?, ?,
           ?, ?, ?, ?,
-          NULL, ?, ?, ?,
+          ?, ?, ?, ?, ?, ?, ?, ?, ?,
           NULL, ?, NULL, NULL, ?,
-          'linear', ?, ?, ?, ?, ?,
+          'linear', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
           NULL, 1, ?, ?
         )
       `);
@@ -1277,7 +1336,13 @@ export class TaskboardDatabase {
           identifier = ?, title = ?, description = ?, status = ?, in_test = ?, priority = ?, labels = ?,
           sort_order = ?, creator_type = ?, creator_id = ?, creator_name = ?, creator_avatar_url = ?,
           assignee_type = ?, assignee_id = ?, assignee_name = ?, assignee_avatar_url = ?,
+          code_project_id = CASE WHEN code_project_mode = 'auto' THEN ? ELSE code_project_id END,
+          code_project_name = CASE WHEN code_project_mode = 'auto' THEN ? ELSE code_project_name END,
+          code_project_kind = CASE WHEN code_project_mode = 'auto' THEN ? ELSE code_project_kind END,
+          code_host_id = CASE WHEN code_project_mode = 'auto' THEN ? ELSE code_host_id END,
+          code_workspace_path = CASE WHEN code_project_mode = 'auto' THEN ? ELSE code_workspace_path END,
           due_date = ?, estimate = ?, external_origin = ?, external_id = ?, external_key = ?, external_url = ?, external_parent = ?,
+          external_project_id = ?, external_project_name = ?, external_team_id = ?, external_team_key = ?, external_team_name = ?,
           archived_at = NULL,
           version = version + 1, updated_at = ?
         WHERE id = ?
@@ -1307,6 +1372,12 @@ export class TaskboardDatabase {
             issue.assignee.id,
             issue.assignee.name,
             issue.assignee.avatarUrl,
+            issue.codeProjectMode ?? "auto",
+            issue.codeProjectBinding?.codexProjectId ?? null,
+            issue.codeProjectBinding?.name ?? null,
+            issue.codeProjectBinding?.codexProjectKind ?? null,
+            issue.codeProjectBinding?.codexHostId ?? null,
+            issue.codeProjectBinding?.workspacePath ?? null,
             issue.developmentContext?.type === "branch" ? issue.developmentContext.branch : null,
             issue.developmentContext?.type === "worktree" ? issue.developmentContext.path : null,
             issue.developmentContext?.type === "worktree" ? issue.developmentContext.branch : null,
@@ -1317,6 +1388,11 @@ export class TaskboardDatabase {
             issue.externalKey,
             issue.externalUrl,
             JSON.stringify(issue.parent),
+            issue.externalProject?.id ?? null,
+            issue.externalProject?.name ?? null,
+            issue.externalTeam?.id ?? null,
+            issue.externalTeam?.key ?? null,
+            issue.externalTeam?.name ?? null,
             issue.createdAt,
             issue.updatedAt,
           );
@@ -1338,6 +1414,13 @@ export class TaskboardDatabase {
           || existing.assignee_id !== issue.assignee.id
           || existing.assignee_name !== issue.assignee.name
           || existing.assignee_avatar_url !== issue.assignee.avatarUrl
+          || (existing.code_project_mode === "auto" && (
+            existing.code_project_id !== (issue.codeProjectBinding?.codexProjectId ?? null)
+            || existing.code_project_name !== (issue.codeProjectBinding?.name ?? null)
+            || existing.code_project_kind !== (issue.codeProjectBinding?.codexProjectKind ?? null)
+            || existing.code_host_id !== (issue.codeProjectBinding?.codexHostId ?? null)
+            || existing.code_workspace_path !== (issue.codeProjectBinding?.workspacePath ?? null)
+          ))
           || existing.due_date !== issue.dueDate
           || existing.estimate !== issue.estimate
           || existing.external_origin !== issue.externalOrigin
@@ -1345,6 +1428,11 @@ export class TaskboardDatabase {
           || existing.external_key !== issue.externalKey
           || existing.external_url !== issue.externalUrl
           || existing.external_parent !== JSON.stringify(issue.parent)
+          || existing.external_project_id !== (issue.externalProject?.id ?? null)
+          || existing.external_project_name !== (issue.externalProject?.name ?? null)
+          || existing.external_team_id !== (issue.externalTeam?.id ?? null)
+          || existing.external_team_key !== (issue.externalTeam?.key ?? null)
+          || existing.external_team_name !== (issue.externalTeam?.name ?? null)
           || existing.archived_at !== null;
         if (!changed) continue;
         updateTask.run(
@@ -1364,6 +1452,11 @@ export class TaskboardDatabase {
           issue.assignee.id,
           issue.assignee.name,
           issue.assignee.avatarUrl,
+          issue.codeProjectBinding?.codexProjectId ?? null,
+          issue.codeProjectBinding?.name ?? null,
+          issue.codeProjectBinding?.codexProjectKind ?? null,
+          issue.codeProjectBinding?.codexHostId ?? null,
+          issue.codeProjectBinding?.workspacePath ?? null,
           issue.dueDate,
           issue.estimate,
           issue.externalOrigin,
@@ -1371,6 +1464,11 @@ export class TaskboardDatabase {
           issue.externalKey,
           issue.externalUrl,
           JSON.stringify(issue.parent),
+          issue.externalProject?.id ?? null,
+          issue.externalProject?.name ?? null,
+          issue.externalTeam?.id ?? null,
+          issue.externalTeam?.key ?? null,
+          issue.externalTeam?.name ?? null,
           issue.updatedAt,
           existing.id,
         );
@@ -2094,7 +2192,32 @@ export class TaskboardDatabase {
     };
     const assignments = [];
     const values = [];
+    if (Object.hasOwn(changes, "codeProjectMode") || Object.hasOwn(changes, "codeProjectBinding")) {
+      const mode = Object.hasOwn(changes, "codeProjectMode")
+        ? changes.codeProjectMode
+        : current.codeProjectMode;
+      const binding = Object.hasOwn(changes, "codeProjectBinding")
+        ? changes.codeProjectBinding
+        : current.codeProjectBinding;
+      assignments.push(
+        "code_project_mode = ?",
+        "code_project_id = ?",
+        "code_project_name = ?",
+        "code_project_kind = ?",
+        "code_host_id = ?",
+        "code_workspace_path = ?",
+      );
+      values.push(
+        mode,
+        binding?.codexProjectId ?? null,
+        binding?.name ?? null,
+        binding?.codexProjectKind ?? null,
+        binding?.codexHostId ?? null,
+        binding?.workspacePath ?? null,
+      );
+    }
     for (const [key, value] of Object.entries(changes)) {
+      if (key === "codeProjectMode" || key === "codeProjectBinding") continue;
       if (key === "developmentContext") {
         assignments.push("git_branch = ?", "worktree_path = ?", "worktree_branch = ?");
         values.push(
@@ -2186,6 +2309,86 @@ export class TaskboardDatabase {
       throw error;
     }
     return this.getTask(current.id);
+  }
+
+  setManagedWorktree(id, version, worktree, actor) {
+    const current = this.#requireTask(id);
+    this.#requireVersion(current, version);
+    const timestamp = now();
+    this.database.exec("BEGIN IMMEDIATE");
+    try {
+      const result = this.database.prepare(`
+        UPDATE tasks SET
+          git_branch = NULL,
+          worktree_path = ?,
+          worktree_branch = ?,
+          managed_worktree = 1,
+          managed_repository_path = ?,
+          managed_base_ref = ?,
+          version = version + 1,
+          updated_at = ?
+        WHERE id = ? AND version = ?
+      `).run(
+        worktree.path,
+        worktree.branch,
+        worktree.repositoryPath,
+        worktree.baseRef,
+        timestamp,
+        current.id,
+        version,
+      );
+      if (result.changes !== 1) this.#throwMissingOrConflict(id, version);
+      this.#recordTaskActivity(current.id, actor, [
+        {
+          field: "developmentContext",
+          before: current.developmentContext,
+          after: { type: "worktree", path: worktree.path, branch: worktree.branch },
+        },
+        {
+          field: "managedWorktree",
+          before: current.managedWorktree,
+          after: { repositoryPath: worktree.repositoryPath, baseRef: worktree.baseRef },
+        },
+      ], timestamp);
+      this.database.exec("COMMIT");
+      return this.getTask(id);
+    } catch (error) {
+      this.database.exec("ROLLBACK");
+      throw error;
+    }
+  }
+
+  clearManagedWorktree(id, version, actor) {
+    const current = this.#requireTask(id);
+    this.#requireVersion(current, version);
+    if (!current.managedWorktree) return current;
+    const timestamp = now();
+    this.database.exec("BEGIN IMMEDIATE");
+    try {
+      const result = this.database.prepare(`
+        UPDATE tasks SET
+          git_branch = NULL,
+          worktree_path = NULL,
+          worktree_branch = NULL,
+          managed_worktree = 0,
+          managed_repository_path = NULL,
+          managed_base_ref = NULL,
+          version = version + 1,
+          updated_at = ?
+        WHERE id = ? AND version = ?
+      `).run(timestamp, current.id, version);
+      if (result.changes !== 1) this.#throwMissingOrConflict(id, version);
+      this.#recordTaskActivity(current.id, actor, [{
+        field: "managedWorktree",
+        before: current.managedWorktree,
+        after: null,
+      }], timestamp);
+      this.database.exec("COMMIT");
+      return this.getTask(id);
+    } catch (error) {
+      this.database.exec("ROLLBACK");
+      throw error;
+    }
   }
 
   moveTask(id, version, status, sortOrder, threadId, threadBinding, actor) {

@@ -326,6 +326,25 @@ export interface CodexProjectIdentity {
   workspacePath: string;
 }
 
+export interface CodeProjectBinding extends CodexProjectIdentity {
+  name: string;
+}
+
+export type CodeProjectMode = "auto" | "explicit" | "none";
+
+export interface LinearRoutingRule {
+  matchType: "project" | "team" | "label" | "default";
+  matchId: string | null;
+  matchName: string;
+  target: CodeProjectBinding;
+}
+
+export interface LinearCatalogEntry {
+  id: string;
+  name: string;
+  key?: string;
+}
+
 export interface CodexThreadBinding extends CodexProjectIdentity {
   threadId: string;
 }
@@ -415,7 +434,13 @@ export interface Task {
   creatorName: string;
   creatorAvatarUrl: string | null;
   assignee: ActorIdentity;
+  codeProjectMode: CodeProjectMode;
+  codeProjectBinding: CodeProjectBinding | null;
   developmentContext: DevelopmentContext | null;
+  managedWorktree?: {
+    repositoryPath: string;
+    baseRef: string;
+  } | null;
   startDate: string | null;
   dueDate: string | null;
   recurrence: Recurrence | null;
@@ -425,6 +450,8 @@ export interface Task {
   externalId?: string | null;
   externalKey?: string | null;
   externalUrl: string | null;
+  externalProject?: LinearCatalogEntry | null;
+  externalTeam?: LinearCatalogEntry | null;
   externalOnly?: boolean;
   locallyTracked?: boolean;
   archivedAt: string | null;
@@ -452,6 +479,10 @@ export interface LinearConnection {
   teams: string[];
   projects: string[];
   members: ActorIdentity[];
+  availableProjects: LinearCatalogEntry[];
+  availableTeams: LinearCatalogEntry[];
+  availableLabels: LinearCatalogEntry[];
+  routes: LinearRoutingRule[];
   projectId: string;
   lastSyncedAt: string | null;
 }
@@ -533,6 +564,8 @@ export interface TaskDraft {
   labels: string[];
   assigneeTarget?: AssigneeTarget;
   assigneeId?: string;
+  codeProjectMode?: CodeProjectMode;
+  codeProjectBinding?: CodeProjectBinding | null;
   developmentContext: DevelopmentContext | null;
   startDate: string | null;
   dueDate: string | null;
