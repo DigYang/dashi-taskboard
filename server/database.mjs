@@ -1266,7 +1266,7 @@ export class TaskboardDatabase {
           ?, NULL, NULL, NULL, NULL, NULL,
           ?, ?, ?, ?,
           ?, ?, ?, ?,
-          NULL, NULL, NULL, NULL,
+          NULL, ?, ?, ?,
           NULL, ?, NULL, NULL, ?,
           'linear', ?, ?, ?, ?, ?,
           NULL, 1, ?, ?
@@ -1307,6 +1307,9 @@ export class TaskboardDatabase {
             issue.assignee.id,
             issue.assignee.name,
             issue.assignee.avatarUrl,
+            issue.developmentContext?.type === "branch" ? issue.developmentContext.branch : null,
+            issue.developmentContext?.type === "worktree" ? issue.developmentContext.path : null,
+            issue.developmentContext?.type === "worktree" ? issue.developmentContext.branch : null,
             issue.dueDate,
             issue.estimate,
             issue.externalOrigin,

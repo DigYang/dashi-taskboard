@@ -4381,6 +4381,7 @@ export function App() {
             ? null
             : newTaskDraft.draft}
           labels={projects.find((project) => project.id === editorProjectId)?.labels ?? []}
+          codexProjects={isLinearProject ? hostContext?.projects : undefined}
           currentUser={editorCurrentUser}
           availableAssignees={isLinearProject ? linearConnection?.members : undefined}
           developmentScan={developmentScan}
