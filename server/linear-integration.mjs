@@ -82,6 +82,20 @@ const ISSUE_DETAIL_QUERY = `
   }
 `;
 
+const ISSUE_COMMENTS_QUERY = `
+  query TaskboardLinearIssueComments($id: String!) {
+    issue(id: $id) {
+      id
+      comments(first: 250) {
+        nodes {
+          id body createdAt updatedAt
+          user { id name email avatarUrl }
+        }
+      }
+    }
+  }
+`;
+
 const UPDATE_ISSUE_MUTATION = `
   mutation TaskboardUpdateIssue($id: String!, $input: IssueUpdateInput!) {
     issueUpdate(id: $id, input: $input) { success issue { id updatedAt } }
@@ -100,6 +114,18 @@ const CREATE_ISSUE_MUTATION = `
         labels(first: 100) { nodes { id name } }
         assignee { id name email avatarUrl }
         creator { id name email avatarUrl }
+      }
+    }
+  }
+`;
+
+const CREATE_COMMENT_MUTATION = `
+  mutation TaskboardCreateLinearComment($input: CommentCreateInput!) {
+    commentCreate(input: $input) {
+      success
+      comment {
+        id body createdAt updatedAt
+        user { id name email avatarUrl }
       }
     }
   }
@@ -259,7 +285,8 @@ function normalizeIssueDetail(issue, config) {
     recurrence: null,
     source: "linear",
     archivedAt: null,
-    readOnly: true,
+    readOnly: false,
+    externalOnly: true,
     relations: {
       parent: normalized.parent,
       subIssues: children.map((child) => externalRelationSummary(child, config)),
@@ -624,6 +651,13 @@ export function createLinearIntegration({ configStore, database, fetch: fetchImp
         throw new ApiError(404, "LINEAR_ISSUE_NOT_FOUND", "Linear 中找不到此议题");
       }
       const detail = normalizeIssueDetail(data.issue, config);
+      if (data.issue.identifier && data.issue.team?.id) issueTeams.set(data.issue.identifier, data.issue.team.id);
+      const localTask = database.getTask(detail.id);
+      if (localTask) {
+        detail.developmentContext = localTask.developmentContext;
+        detail.locallyTracked = true;
+        detail.version = localTask.version;
+      }
       if (detail.relations.parent) {
         const localParent = database.getTask(detail.relations.parent.id);
         if (localParent) detail.relations.parent = relationSummaryFromTask(localParent);
@@ -633,6 +667,63 @@ export function createLinearIntegration({ configStore, database, fetch: fetchImp
         return localChild ? relationSummaryFromTask(localChild) : child;
       });
       return detail;
+    },
+    async listComments(id) {
+      const config = await configStore.read();
+      if (!config) throw new ApiError(409, "LINEAR_NOT_CONFIGURED", "Linear 尚未配置");
+      const externalId = String(id).startsWith(`LINEAR:${config.organizationId.toUpperCase()}:`)
+        ? String(id).slice(`LINEAR:${config.organizationId.toUpperCase()}:`.length)
+        : String(id);
+      const data = await request(config, ISSUE_COMMENTS_QUERY, { id: externalId });
+      if (!data?.issue?.id) throw new ApiError(404, "LINEAR_ISSUE_NOT_FOUND", "Linear 中找不到此议题");
+      const nodes = Array.isArray(data.issue.comments?.nodes) ? data.issue.comments.nodes : [];
+      return nodes.map((comment) => ({
+        id: `LINEAR_COMMENT:${comment.id}`,
+        taskId: id,
+        body: typeof comment.body === "string" ? comment.body : "",
+        authorType: "user",
+        authorId: actorFromLinear(comment.user, "Linear user").id,
+        authorName: actorFromLinear(comment.user, "Linear user").name,
+        authorAvatarUrl: actorFromLinear(comment.user, "Linear user").avatarUrl,
+        threadId: null,
+        threadBinding: null,
+        legacyLocalThreadId: null,
+        attachments: [],
+        version: 1,
+        createdAt: comment.createdAt,
+        updatedAt: comment.updatedAt,
+      }));
+    },
+    async createComment(id, body) {
+      const config = await configStore.read();
+      if (!config) throw new ApiError(409, "LINEAR_NOT_CONFIGURED", "Linear 尚未配置");
+      const externalId = String(id).startsWith(`LINEAR:${config.organizationId.toUpperCase()}:`)
+        ? String(id).slice(`LINEAR:${config.organizationId.toUpperCase()}:`.length)
+        : String(id);
+      const data = await request(config, CREATE_COMMENT_MUTATION, {
+        input: { issueId: externalId, body },
+      });
+      const comment = data?.commentCreate?.comment;
+      if (data?.commentCreate?.success !== true || !comment?.id) {
+        throw new ApiError(409, "LINEAR_COMMENT_FAILED", "Linear 未确认评论发布成功");
+      }
+      const author = actorFromLinear(comment.user, config.displayName);
+      return {
+        id: `LINEAR_COMMENT:${comment.id}`,
+        taskId: id,
+        body: typeof comment.body === "string" ? comment.body : body,
+        authorType: author.type,
+        authorId: author.id,
+        authorName: author.name,
+        authorAvatarUrl: author.avatarUrl,
+        threadId: null,
+        threadBinding: null,
+        legacyLocalThreadId: null,
+        attachments: [],
+        version: 1,
+        createdAt: comment.createdAt,
+        updatedAt: comment.updatedAt,
+      };
     },
     async getImage(url) {
       const config = await configStore.read();

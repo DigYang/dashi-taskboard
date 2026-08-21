@@ -92,6 +92,7 @@ interface TaskDetailProps {
   referenceTasks: Task[];
   currentUser: ActorIdentity;
   availableAssignees?: ActorIdentity[];
+  availableCodeProjects?: Array<{ id: string; name: string; workspacePath?: string }>;
   availableLabels: string[];
   developmentScan: DevelopmentScan;
   developmentScanLoading: boolean;
@@ -447,6 +448,7 @@ export function TaskDetail({
   referenceTasks,
   currentUser,
   availableAssignees,
+  availableCodeProjects = [],
   availableLabels,
   developmentScan,
   developmentScanLoading,
@@ -474,7 +476,7 @@ export function TaskDetail({
   );
   const [editingDescription, setEditingDescription] = useState(false);
   const [propertyMenu, setPropertyMenu] = useState<
-    "status" | "priority" | "estimate" | "assignee" | "labels" | "development" | "recurrence" | null
+    "status" | "priority" | "estimate" | "assignee" | "labels" | "codeProject" | "development" | "recurrence" | null
   >(null);
   const [savingProperty, setSavingProperty] = useState<string | null>(null);
   const [attachments, setAttachments] = useState<Attachment[]>([]);
@@ -516,6 +518,7 @@ export function TaskDetail({
   const editingDraft = serializeInlineMedia(editingSegments);
   const displayIdentifier = currentTask.externalKey ?? currentTask.identifier;
   const readOnly = currentTask.readOnly === true;
+  const externalLinear = currentTask.source === "linear" && currentTask.externalOnly === true;
   const editingInlineImages = inlineMediaImages(editingSegments);
 
   useEffect(() => {
@@ -562,7 +565,9 @@ export function TaskDetail({
     setCommentsError(null);
     void Promise.all([
       listComments(task.id, controller.signal),
-      listTaskActivities(task.id, controller.signal),
+      task.source === "linear" && task.externalOnly
+        ? Promise.resolve([])
+        : listTaskActivities(task.id, controller.signal),
     ]).then(
       ([nextComments, nextActivities]) => {
         setComments(nextComments);
@@ -579,7 +584,7 @@ export function TaskDetail({
   }, [commentsRevision, task.activityKey, task.id]);
 
   useEffect(() => {
-    if (task.readOnly) {
+    if (task.readOnly || (task.source === "linear" && task.externalOnly)) {
       setAttachments([]);
       setAttachmentsError(null);
       return;
@@ -971,6 +976,12 @@ export function TaskDetail({
   ) {
     developmentOptions.unshift(currentTask.developmentContext);
   }
+  const currentWorktreePath = currentTask.developmentContext?.type === "worktree"
+    ? currentTask.developmentContext.path
+    : null;
+  const selectedCodeProjectId = currentWorktreePath
+    ? availableCodeProjects.find((project) => project.workspacePath === currentWorktreePath)?.id ?? ""
+    : "";
   const assigneeOptions = [
     currentTask.assignee,
     currentUser,
@@ -1030,7 +1041,7 @@ export function TaskDetail({
                 <IssueParentLink
                   task={currentTask}
                   tasks={tasks}
-                  readOnly={readOnly}
+                  readOnly={readOnly || externalLinear}
                   onOpenTask={onOpenTask}
                   onAddRelation={(anchor, type, relatedTaskId) => applyRelationMutation(
                     () => onAddRelation(anchor, type, relatedTaskId),
@@ -1125,7 +1136,7 @@ export function TaskDetail({
                     <span>{visibleTaskAttachments.length}</span>
                   </div>
                 )}
-                {!readOnly && <button
+                {!readOnly && !externalLinear && <button
                   className="attachment-add-button"
                   type="button"
                   disabled={uploadingAttachments}
@@ -1136,7 +1147,7 @@ export function TaskDetail({
                     ? text("上传中…", "Uploading…")
                     : text("添加附件", "Add attachment")}
                 </button>}
-                {!readOnly && <input
+                {!readOnly && !externalLinear && <input
                   ref={attachmentInputRef}
                   type="file"
                   multiple
@@ -1202,7 +1213,7 @@ export function TaskDetail({
             <IssueSubIssues
               task={currentTask}
               tasks={tasks}
-              readOnly={readOnly}
+              readOnly={readOnly || externalLinear}
               onOpenTask={onOpenTask}
               onAddRelation={(anchor, type, relatedTaskId) => applyRelationMutation(
                 () => onAddRelation(anchor, type, relatedTaskId),
@@ -1334,7 +1345,7 @@ export function TaskDetail({
                             {text("已编辑", "Edited")}
                           </span>
                         )}
-                        {editingId !== comment.id && (
+                        {editingId !== comment.id && currentTask.source !== "linear" && (
                           <div className="comment-actions" data-comment-menu-root={comment.id}>
                             <button
                               type="button"
@@ -1476,7 +1487,7 @@ export function TaskDetail({
                                   </span>
                                   <span><strong>{attachment.filename}</strong><small>{fileSize(attachment.size)}</small></span>
                                 </a>
-                                {editingId !== comment.id && (
+                                {editingId !== comment.id && currentTask.source !== "linear" && (
                                   <button
                                     type="button"
                                     aria-label={text(`删除 ${attachment.filename}`, `Delete ${attachment.filename}`)}
@@ -1549,7 +1560,7 @@ export function TaskDetail({
                 />
                 <footer className="composer-footer">
                   <div className="composer-footer-leading">
-                    <button
+                    {currentTask.source !== "linear" && <button
                       className="comment-attach-button"
                       type="button"
                       disabled={submitting}
@@ -1558,8 +1569,8 @@ export function TaskDetail({
                       onClick={() => commentAttachmentInputRef.current?.click()}
                     >
                       <LinearIcon name="attachment" />
-                    </button>
-                    <input
+                    </button>}
+                    {currentTask.source !== "linear" && <input
                       ref={commentAttachmentInputRef}
                       type="file"
                       multiple
@@ -1567,7 +1578,7 @@ export function TaskDetail({
                       onChange={(event) => {
                         if (event.currentTarget.files) stageCommentFiles(event.currentTarget.files);
                       }}
-                    />
+                    />}
                   </div>
                   <div>
                     <div className="comment-status-action">
@@ -1602,7 +1613,7 @@ export function TaskDetail({
 
           <aside className="issue-properties" aria-label={text("议题属性", "Issue properties")}>
             <div className="detail-primary-actions">
-              {!readOnly && <button
+              {!readOnly && (!externalLinear || currentTask.locallyTracked) && <button
                 className="detail-open-thread-action"
                 type="button"
                 disabled={openingThread}
@@ -1775,7 +1786,40 @@ export function TaskDetail({
                 onDeleteLabel={currentTask.source === "local" ? onDeleteLabel : undefined}
               />
             </div>
-            <div className="detail-property-row development-property">
+            {currentTask.source === "linear" && (
+              <div className="detail-property-row">
+                <span className="detail-property-label">{text("代码项目", "Code project")}</span>
+                <TaskPropertyPicker
+                  value={selectedCodeProjectId}
+                  options={[
+                    { value: "", label: text("未绑定", "Not linked"), icon: <LinearIcon name="folder" /> },
+                    ...availableCodeProjects.filter((project) => project.workspacePath).map((project) => ({
+                      value: project.id,
+                      label: project.name,
+                      icon: <LinearIcon name="folder" />,
+                    })),
+                  ]}
+                  open={propertyMenu === "codeProject"}
+                  disabled={readOnly || !currentTask.locallyTracked || savingProperty === "developmentContext"}
+                  className="detail-property-picker"
+                  triggerClassName="detail-property-trigger"
+                  ariaLabel={text("代码项目", "Code project")}
+                  searchable
+                  searchPlaceholder={text("搜索代码项目…", "Search code projects…")}
+                  emptyText={text("没有匹配的项目", "No matching projects")}
+                  onOpenChange={(open) => setPropertyMenu(open ? "codeProject" : null)}
+                  onChange={(value) => {
+                    const selected = availableCodeProjects.find((project) => project.id === value);
+                    void saveTask({
+                      developmentContext: selected?.workspacePath
+                        ? { type: "worktree", path: selected.workspacePath, branch: null }
+                        : null,
+                    }, "developmentContext");
+                  }}
+                />
+              </div>
+            )}
+            {currentTask.source !== "linear" && <div className="detail-property-row development-property">
               <span className="detail-property-label">{text("开发上下文", "Development context")}</span>
               <TaskPropertyPicker
                 value={contextValue(currentTask.developmentContext)}
@@ -1804,7 +1848,7 @@ export function TaskDetail({
                   developmentContext: value ? JSON.parse(value) as DevelopmentContext : null,
                 }, "developmentContext")}
               />
-            </div>
+            </div>}
             <label
               className="detail-property-row detail-date-property-row"
               onClick={(event) => {
@@ -1820,7 +1864,7 @@ export function TaskDetail({
               <input
                 type="date"
                 value={currentTask.startDate ?? ""}
-                disabled={readOnly || savingProperty === "startDate"}
+                disabled={readOnly || externalLinear || savingProperty === "startDate"}
                 onChange={(event) => void saveTask({
                   startDate: event.target.value || null,
                 }, "startDate")}
@@ -1860,7 +1904,7 @@ export function TaskDetail({
                   { value: "year", label: text("每年", "Yearly"), icon: <LinearIcon name="recurrence" /> },
                 ]}
                 open={propertyMenu === "recurrence"}
-                disabled={readOnly || savingProperty === "recurrence"}
+                disabled={readOnly || externalLinear || savingProperty === "recurrence"}
                 className="detail-property-picker"
                 triggerClassName="detail-property-trigger"
                 ariaLabel={text("重复", "Recurrence")}

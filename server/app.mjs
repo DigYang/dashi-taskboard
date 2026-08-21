@@ -3061,14 +3061,24 @@ export function createTaskboardServer(options = {}) {
           throw new ApiError(400, "UNKNOWN_QUERY_PARAMETER", "Comment routes do not accept query parameters");
         }
         if (request.method === "GET") {
+          const task = database.getTask(taskId);
+          if (task?.source === "linear" || taskId.startsWith("LINEAR:")) {
+            return sendJson(response, 200, { comments: await linear.listComments(taskId) });
+          }
           return sendJson(response, 200, { comments: database.listComments(taskId) });
         }
         if (request.method === "POST") {
+          const input = resolveInputThreadBinding(parseCommentCreate(await readJson(request)));
+          const task = database.getTask(taskId);
+          if (task?.source === "linear" || taskId.startsWith("LINEAR:")) {
+            const comment = await linear.createComment(taskId, input.body);
+            events.emit("comment.created", { comment, task: task ?? await linear.getIssueDetail(taskId) });
+            return sendJson(response, 201, { comment });
+          }
           const comment = database.createComment(taskId, {
-            ...resolveInputThreadBinding(parseCommentCreate(await readJson(request))),
+            ...input,
             actor: actorFromRequest(request),
           });
-          const task = database.getTask(taskId);
           events.emit("comment.created", { comment, task });
           return sendJson(response, 201, { comment });
         }
@@ -3292,7 +3302,34 @@ export function createTaskboardServer(options = {}) {
             assigneeTarget,
             assigneeId,
           } = resolveInputThreadBinding(parseTaskPatch(await readJson(request)));
-          const current = database.getTask(id);
+          const storedTask = database.getTask(id);
+          if (id.startsWith("LINEAR:")) {
+            const current = await linear.getIssueDetail(id);
+            if (current.version !== version) {
+              throw new ApiError(409, "VERSION_CONFLICT", "Task changed since it was last read", {
+                expectedVersion: version,
+                actualVersion: current.version,
+              });
+            }
+            await linear.updateTask(current, {
+              ...changes,
+              ...(assigneeId !== undefined ? { assigneeId } : {}),
+            });
+            if (storedTask && Object.hasOwn(changes, "developmentContext")) {
+              database.updateTask(
+                id,
+                storedTask.version,
+                { developmentContext: changes.developmentContext },
+                threadId,
+                threadBinding,
+                actor,
+              );
+            }
+            const task = await linear.getIssueDetail(id);
+            events.emit("task.updated", { task });
+            return sendJson(response, 200, { task });
+          }
+          const current = storedTask;
           if (!current) throw new ApiError(404, "TASK_NOT_FOUND", `Task '${id}' does not exist`);
           let jiraChanged = false;
           let linearChanged = false;
